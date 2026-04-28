@@ -1,7 +1,8 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/ai-proxy.ts": {
-      "maxDuration": 60
+    "api/*.ts": {
+      "maxDuration": 300
     }
   },
   "headers": [
