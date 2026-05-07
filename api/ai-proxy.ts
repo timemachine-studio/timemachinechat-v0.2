@@ -12,8 +12,8 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
-    provider: 'cerebras', // You can change this to 'groq' or 'pollinations' anytime
-    model: 'qwen-3-235b-a22b-instruct-2507',
+    provider: 'groq', // You can change this to 'groq' or 'pollinations' anytime
+    model: 'openai/gpt-oss-120b',
     temperature: 0.9,
     maxTokens: 4000,
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
@@ -679,8 +679,8 @@ function getAudioSystemPrompt(persona: string): string {
 }
 
 // Pollinations API configuration
-const POLLINATIONS_API_KEY = process.env.POLLINATIONS_API_KEY || '';
-const POLLINATIONS_API_URL = 'https://enter.pollinations.ai/api/generate/v1/chat/completions';
+const POLLINATIONS_API_KEY = (process.env.POLLINATIONS_API_KEY || '').trim();
+const POLLINATIONS_API_URL = 'https://gen.pollinations.ai/v1/chat/completions';
 
 interface ImageGenerationParams {
   prompt: string;
@@ -1329,6 +1329,10 @@ async function callPollinationsAPIStreaming(
   maxTokens?: number,
   tools?: any[]
 ): Promise<ReadableStream> {
+  if (!POLLINATIONS_API_KEY) {
+    throw new Error('POLLINATIONS_API_KEY is not configured for Pollinations requests');
+  }
+
   // Filter out empty system messages
   const cleanedMessages = messages.filter(msg =>
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
@@ -1452,6 +1456,10 @@ async function callPollinationsAPI(
   maxTokens?: number,
   tools?: any[]
 ): Promise<any> {
+  if (!POLLINATIONS_API_KEY) {
+    throw new Error('POLLINATIONS_API_KEY is not configured for Pollinations requests');
+  }
+
   // Filter out empty system messages
   const cleanedMessages = messages.filter(msg =>
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
