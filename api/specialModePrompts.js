@@ -15,7 +15,7 @@ export const SPECIAL_MODE_CONFIGS = {
   'web-coding': {
 
     default: {
-      model: 'qwen-3-235b-a22b-instruct-2507',
+      model: 'mistral-4',
       temperature: 0.9,
       maxTokens: 8500,
       tools: [],
@@ -105,9 +105,9 @@ Remember: You are capable of extraordinary creative work. Don't hold back, show 
     },
 
     pro: {
-      model: 'glm',
+      model: 'minimax',
       temperature: 0.8,
-      maxTokens: 25000,
+      maxTokens: 45000,
       tools: [],
       systemPrompt: `You are TimeMachine, the best frontend engineer in the world.  
       
@@ -157,7 +157,7 @@ Remember: You are capable of extraordinary creative work. Don't hold back, show 
   'music-compose': {
 
     default: {
-      model: 'qwen-3-235b-a22b-instruct-2507',
+      model: 'mistral-4',
       temperature: 0.8,
       maxTokens: 4000,
       tools: [],
@@ -246,7 +246,7 @@ Example output:
     },
 
     pro: {
-      model: 'openai',
+      model: 'minimax',
       temperature: 0.8,
       maxTokens: 6000,
       tools: [],
@@ -297,7 +297,7 @@ Example output:
   'tm-healthcare': {
 
     default: {
-      model: 'qwen-3-235b-a22b-instruct-2507',
+      model: 'mistral-4',
       temperature: 0.7,
       maxTokens: 3000,
       tools: ['webSearch'],
@@ -394,7 +394,7 @@ Your responses will include a <database_context> block containing verified drug 
     },
 
     pro: {
-      model: 'glm',
+      model: 'minimax',
       temperature: 0.6,
       maxTokens: 5000,
       tools: ['webSearch'],
