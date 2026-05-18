@@ -12,10 +12,10 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
-    provider: 'groq', // You can change this to 'groq' or 'pollinations' anytime
-    model: 'openai/gpt-oss-120b',
+    provider: 'pollinations', // You can change this to 'groq' or 'pollinations' anytime
+    model: 'openai',
     temperature: 0.9,
-    maxTokens: 4000,
+    maxTokens: 7000,
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
 
 You're the friend who knows everything, tells the truth even when it's uncomfortable, and actually wants the user to win.
