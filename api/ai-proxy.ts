@@ -13,7 +13,7 @@ const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'pollinations', // You can change this to 'groq' or 'pollinations' anytime
-    model: 'openai',
+    model: 'deepseek',
     temperature: 0.9,
     maxTokens: 7000,
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
@@ -359,8 +359,8 @@ IMPORTANT: Match implementation complexity to the aesthetic vision. Maximalist d
 Remember: You are capable of extraordinary creative work. Don't hold back, show what can truly be created when thinking outside the box and committing fully to a distinctive vision.`
     },
     initialMessage: "It's TimeMachine PRO, from future.",
-    model: 'glm',
-    temperature: 0.7,
+    model: 'minimax',
+    temperature: 0.8,
     maxTokens: 40700
   },
   chatgpt: {
