@@ -13,7 +13,7 @@ const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'pollinations', // You can change this to 'groq' or 'pollinations' anytime
-    model: 'deepseek',
+    model: 'grok',
     temperature: 0.8,
     maxTokens: 7000,
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
