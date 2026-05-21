@@ -751,10 +751,8 @@ async function fetchWebSearchResults(params: WebSearchParams): Promise<string> {
   }
 }
 
-// Memory tool params
-interface MemoryParams {
-  content: string;
-}
+// Memory tool params (MemoryParams kept for reference)
+// interface MemoryParams { content: string; }
 
 interface AIMemory {
   id: string;
@@ -1554,8 +1552,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Map persona key to the 3 base personas used in special mode configs
     const basePersona = (['default', 'girlie', 'pro'].includes(persona) ? persona : 'default') as 'default' | 'girlie' | 'pro';
-    const specialModeConfig = specialMode && SPECIAL_MODE_CONFIGS[specialMode]
-      ? SPECIAL_MODE_CONFIGS[specialMode][basePersona]
+    const specialModeConfig = specialMode && (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode]
+      ? (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode][basePersona]
       : null;
 
     // Get the appropriate system prompt
@@ -1567,7 +1565,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const validHeatLevel = (heatLevel >= 1 && heatLevel <= 5) ? heatLevel : 2;
       systemPrompt = personaConfig.systemPromptsByHeatLevel[validHeatLevel as keyof typeof personaConfig.systemPromptsByHeatLevel];
     } else {
-      systemPrompt = personaConfig.systemPrompt;
+      systemPrompt = (personaConfig as any).systemPrompt;
     }
 
     // Fetch user memories and add to system prompt if user is logged in
@@ -1826,8 +1824,7 @@ ${TOOL_GUARDRAIL}
             toolsToUse,
             modelToUse,
             temperatureToUse,
-            maxTokensToUse,
-            reasoningEffortToUse
+            maxTokensToUse
           );
         }
       } else if (persona === 'pro') {
@@ -1901,7 +1898,7 @@ ${TOOL_GUARDRAIL}
                 // Process any accumulated tool calls
                 console.log('Processing tool calls, map size:', toolCallsMap.size);
                 if (toolCallsMap.size > 0) {
-                  for (const [index, toolCall] of toolCallsMap.entries()) {
+                  for (const [_index, toolCall] of toolCallsMap.entries()) {
                     console.log('Processing tool call:', toolCall.function?.name, 'args length:', toolCall.function?.arguments?.length);
 
                     // Skip if arguments are empty or invalid
