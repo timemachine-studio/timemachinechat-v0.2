@@ -32,14 +32,14 @@ function constructPollinationsUrl(params: ImageParams): URL {
   let model: string;
   if (process === 'edit') {
     // Edit process: use nanobanana models
-    model = persona === 'girlie' ? 'klein-large' : 'klein-large';
+    model = persona === 'girlie' ? 'klein-large' : 'wan-image';
   } else {
     // Create process: use seedream/zimage models
-    model = persona === 'girlie' ? 'zimage' : 'zimage';
+    model = persona === 'girlie' ? 'zimage' : 'wan-image';
   }
 
   // Use WHATWG URL API to avoid url.parse() deprecation warning
-  const url = new URL(`https://gen.pollinations.ai/api/generate/image/${encodeURIComponent(prompt)}`);
+  const url = new URL(`https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}`);
 
   // Add common parameters
   url.searchParams.set('enhance', 'false');
