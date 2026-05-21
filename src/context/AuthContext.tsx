@@ -39,6 +39,25 @@ interface AuthProviderProps {
   children: React.ReactNode;
 }
 
+const AUTH_INIT_TIMEOUT_MS = 8000;
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -122,7 +141,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     const initializeAuth = async () => {
       try {
         // Get initial session
-        const { data: { session: initialSession } } = await supabase.auth.getSession();
+        const { data: { session: initialSession } } = await withTimeout(
+          supabase.auth.getSession(),
+          AUTH_INIT_TIMEOUT_MS,
+          'Supabase auth session'
+        );
 
         if (!mounted) return;
 
@@ -130,7 +153,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           currentUserIdRef.current = initialSession.user.id;
           setSession(initialSession);
           setUser(initialSession.user);
-          const userProfile = await fetchProfile(initialSession.user.id);
+          const userProfile = await withTimeout(
+            fetchProfile(initialSession.user.id),
+            AUTH_INIT_TIMEOUT_MS,
+            'Supabase profile fetch'
+          );
           if (mounted) {
             setProfile(userProfile);
           }
@@ -192,7 +219,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           setUser(newSession.user);
 
           try {
-            const userProfile = await fetchProfile(newSession.user.id);
+            const userProfile = await withTimeout(
+              fetchProfile(newSession.user.id),
+              AUTH_INIT_TIMEOUT_MS,
+              'Supabase profile fetch'
+            );
             if (mounted) {
               setProfile(userProfile);
             }
@@ -209,6 +240,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
     return () => {
       mounted = false;
+      initializingRef.current = false;
       subscription.unsubscribe();
     };
   }, [fetchProfile]);
