@@ -32,10 +32,10 @@ function constructPollinationsUrl(params: ImageParams): URL {
   let model: string;
   if (process === 'edit') {
     // Edit process: use nanobanana models
-    model = persona === 'girlie' ? 'klein-large' : 'klein-large';
+    model = persona === 'girlie' ? 'klein' : 'klein';
   } else {
     // Create process: use seedream/zimage models
-    model = persona === 'girlie' ? 'zimage' : 'zimage';
+    model = persona === 'girlie' ? 'zimage' : 'klein';
   }
 
   // Use WHATWG URL API to avoid url.parse() deprecation warning
