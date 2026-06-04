@@ -882,8 +882,8 @@ function formatMemoriesForContext(memories: AIMemory[], userProfile?: { nickname
 // Default rate limiting configuration (fallback when no custom limits set)
 const DEFAULT_PERSONA_LIMITS: Record<string, number> = {
   default: parseInt(process.env.VITE_DEFAULT_PERSONA_LIMIT || '50'),
-  girlie: parseInt(process.env.VITE_GIRLIE_PERSONA_LIMIT || '25'),
-  pro: parseInt(process.env.VITE_PRO_PERSONA_LIMIT || '10'),
+  girlie: parseInt(process.env.VITE_GIRLIE_PERSONA_LIMIT || '70'),
+  pro: parseInt(process.env.VITE_PRO_PERSONA_LIMIT || '50'),
   // External AIs have higher limits since they use their own APIs
   chatgpt: 25,
   gemini: 20,
