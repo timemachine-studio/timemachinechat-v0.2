@@ -35,7 +35,7 @@ function constructPollinationsUrl(params: ImageParams): URL {
     model = persona === 'girlie' ? 'klein' : 'klein';
   } else {
     // Create process: use seedream/zimage models
-    model = persona === 'girlie' ? 'zimage' : 'zimage';
+    model = persona === 'girlie' ? 'gptimage-large' : 'gptimage-large';
   }
 
   // Use WHATWG URL API to avoid url.parse() deprecation warning
