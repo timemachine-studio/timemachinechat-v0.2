@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { SPECIAL_MODE_CONFIGS } from './specialModePrompts.js';
-import { PERSONA_AUDIO_CONFIGS } from './audio.js';
 
 // Initialize Supabase client for server-side operations
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://etpehiyzlkhknzceizar.supabase.co';
@@ -15,13 +14,13 @@ const AI_PERSONAS = {
     provider: 'pollinations', // allowed change to 'groq' or 'cerebras' or 'pollinations'
     model: 'gemma',
     temperature: 0.8,
-    maxTokens: 10700,
+    maxTokens: 20700,
     flowState: {
       provider: 'cerebras',
       model: 'gpt-oss-120b',
-      temperature: 0.7,
-      maxTokens: 17700,
-      quotaCost: 3
+      temperature: 0.8,
+      maxTokens: 27700,
+      quotaCost: 5
     },
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
 
@@ -237,7 +236,6 @@ You're the friend who knows everything, tells the truth even when it's uncomfort
 You're smart but never condescending. Funny but never mean. Honest but never harsh for sport. Every response should feel like it came from someone who genuinely gives a damn and care about the user. That's the vibe.
 Now go be the best AI friend anyone's ever had.
 
-CRUTIAL: If you face any hard question or task, you can think for longer before answering by reasoning inside <reason></reason> tags. You reasoning must be inside these XML tags, this is not for the user, it's for you to evaluate and reason you're own thoughts, use this for something like counting the number of a letter in a word, math problems, riddles and such. Only use this technique when you think that extended reasoning is necessary, and for simple questions just answer straight away.
 `,
 
       3: `You are TimeMachine PRO, an automated artificial intelligence designed for efficient, direct query processing. Your function is to provide accurate responses or artifacts with minimal language. You exhibit no personality, emotions, or conversational elements. Responses are concise, factual, and task-focused.
@@ -364,9 +362,9 @@ Image Generation: When users request images, use the generate_image function wit
 You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule with an iron fist, slay with a wicked tongue, and make every answer a power move. Let's burn this shit down.`
     },
     initialMessage: "It's TimeMachine PRO, from future.",
-    model: 'kimi-k2.7-code',
+    model: 'glm',
     temperature: 0.8,
-    maxTokens: 40700
+    maxTokens: 70700
   },
   chatgpt: {
     name: 'ChatGPT',
@@ -676,12 +674,7 @@ async function processMemoryTags(
   return { content: cleanedContent, memoryContent, hasSavedMemory };
 }
 
-// Per-persona audio system prompts are now defined in audio.ts and imported via PERSONA_AUDIO_CONFIGS
-// Use getAudioSystemPrompt(persona) to get the correct prompt for each persona
-function getAudioSystemPrompt(persona: string): string {
-  const config = PERSONA_AUDIO_CONFIGS[persona] || PERSONA_AUDIO_CONFIGS.default;
-  return config.audioSystemPrompt;
-}
+
 
 // Pollinations API configuration
 const POLLINATIONS_API_KEY = (process.env.POLLINATIONS_API_KEY || '').trim();
@@ -1342,11 +1335,16 @@ async function callPollinationsAPIStreaming(
   );
 
   const requestBody: any = {
-    model: model,
-    messages: cleanedMessages,
-    temperature,
-    stream: true
-  };
+  model: model,
+  messages: cleanedMessages,
+  temperature,
+  stream: true,
+
+  // --- Bulletproof Thinking/Reasoning Deactivation ---
+  thinking_budget: 0,          // Maps to Gemini / Open-source routers
+  reasoning_effort: "none",    // Maps to OpenAI-style routers
+  thinking: null               // Maps to Anthropic-style routers
+};
 
   if (maxTokens) {
     requestBody.max_tokens = maxTokens;
@@ -1632,73 +1630,9 @@ ${TOOL_GUARDRAIL}
     // pdfExtractedText = cached text from a previous upload in the same session (follow-up)
     const pdfTextContent = pdfData || pdfExtractedText || '';
 
-    // Handle audio transcription if audioData is provided
-    let processedMessages = [...messages];
-    let isAudioInput = false;
-    if (audioData) {
-      isAudioInput = true;
-      try {
-        const GROQ_API_KEY = process.env.GROQ_API_KEY;
-        if (!GROQ_API_KEY) {
-          throw new Error('GROQ_API_KEY not configured for audio transcription');
-        }
-
-        // Convert base64 to buffer
-        const base64Data = audioData.split(',')[1]; // Remove data:audio/webm;base64, prefix
-        const audioBuffer = Buffer.from(base64Data, 'base64');
-
-        // Create form data for Groq API
-        const formData = new FormData();
-        const audioBlob = new Blob([audioBuffer], { type: 'audio/webm' });
-        formData.append('file', audioBlob, 'recording.webm');
-        formData.append('model', 'whisper-large-v3-turbo');
-        formData.append('language', 'en');
-        formData.append('response_format', 'text');
-
-        // Call Groq Whisper API
-        const transcriptionResponse = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${GROQ_API_KEY}`,
-          },
-          body: formData
-        });
-
-        if (!transcriptionResponse.ok) {
-          throw new Error(`Transcription failed: ${transcriptionResponse.status}`);
-        }
-
-        const transcriptionText = await transcriptionResponse.text();
-
-        // Replace the last message content with transcribed text if it was an audio message
-        if (processedMessages.length > 0) {
-          const lastMessage = processedMessages[processedMessages.length - 1];
-          if (lastMessage.content === '[Audio message]' || !lastMessage.content.trim()) {
-            processedMessages[processedMessages.length - 1] = {
-              ...lastMessage,
-              content: transcriptionText.trim() || 'I sent an audio message but it couldn\'t be transcribed.'
-            };
-          }
-        }
-      } catch (error) {
-        console.error('Audio transcription error:', error);
-        // If transcription fails, we'll proceed with the original message
-        if (processedMessages.length > 0) {
-          const lastMessage = processedMessages[processedMessages.length - 1];
-          if (lastMessage.content === '[Audio message]') {
-            processedMessages[processedMessages.length - 1] = {
-              ...lastMessage,
-              content: 'I sent an audio message but it couldn\'t be transcribed. Please try again.'
-            };
-          }
-        }
-      }
-
-      // Override system prompt for audio input with per-persona audio prompt
-      // Keep the persona's own model so each persona sounds like itself
-      systemPromptToUse = getAudioSystemPrompt(persona);
-      toolsToUse = []; // No tools for audio-only interaction
-    }
+    // Audio processing removed (now using client-side STT)
+    const processedMessages = [...messages];
+    const isAudioInput = false;
 
     let apiMessages;
     // Track if we need to run the image OCR pipeline before the main AI call
@@ -2021,23 +1955,6 @@ ${TOOL_GUARDRAIL}
           }
         }
 
-        // Generate audio response if needed — use /api/audio proxy to keep secrets server-side
-        if (isAudioInput && fullContent) {
-          try {
-            const cleanContent = fullContent
-              .replace(/[*_`#]/g, '') // Remove markdown formatting
-              .replace(/\n+/g, ' ') // Replace newlines with spaces
-              .replace(/<memory>[\s\S]*?<\/memory>/gi, '') // Remove memory tags
-              .trim();
-
-            // Build proxy URL — the /api/audio endpoint handles Pollinations key + voice selection
-            const audioProxyUrl = `/api/audio?message=${encodeURIComponent(cleanContent)}&persona=${encodeURIComponent(persona)}`;
-
-            res.write(`\n\n[AUDIO_URL]${audioProxyUrl}[/AUDIO_URL]`);
-          } catch (error) {
-            console.error('Error generating audio URL:', error);
-          }
-        }
 
         res.end();
       } catch (error) {
@@ -2317,30 +2234,10 @@ ${TOOL_GUARDRAIL}
       // Extract reasoning content for all personas
       const result = extractReasoningAndContent(fullContent);
 
-      // If this was an audio input, generate audio response using /api/audio proxy
-      let audioUrl: string | undefined;
-      if (isAudioInput && result.content) {
-        try {
-          // Clean the content for TTS (remove markdown, etc.)
-          const cleanContent = result.content
-            .replace(/[*_`#]/g, '') // Remove markdown formatting
-            .replace(/\n+/g, ' ') // Replace newlines with spaces
-            .trim();
-
-          // Build proxy URL — the /api/audio endpoint handles Pollinations key + voice selection
-          audioUrl = `/api/audio?message=${encodeURIComponent(cleanContent)}&persona=${encodeURIComponent(persona)}`;
-        } catch (error) {
-          console.error('Error generating audio URL:', error);
-          // Continue without audio URL if there's an error
-        }
-      }
-
-      // Send complete response as JSON
+      // Send complete response as JSON (audioUrl generation removed)
       return res.status(200).json({
         content: result.content,
-        thinking: result.thinking,
-        audioUrl: audioUrl,
-
+        thinking: result.thinking
       });
     }
 
