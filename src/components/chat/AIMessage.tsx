@@ -31,6 +31,7 @@ interface AIMessageProps extends MessageProps {
   brandOverride?: BrandOverride;
   musicVariations?: SavedVariation[];
   onMusicVariationsChange?: (messageId: number, variations: SavedVariation[]) => void;
+  rawContent?: string;
 }
 
 const SPECIAL_MODE_SHIMMER_TEXT: Record<string, string> = {
@@ -114,10 +115,31 @@ function AIMessageComponent({
   specialMode,
   brandOverride,
   musicVariations,
-  onMusicVariationsChange
+  onMusicVariationsChange,
+  rawContent
 }: AIMessageProps) {
   const [showReasoning, setShowReasoning] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const hasAutoCollapsedRef = useRef(false);
+
+  const isThinkingFinished = useMemo(() => {
+    if (!isStreamingActive) return true;
+    return !!(rawContent && rawContent.includes('</reason>'));
+  }, [isStreamingActive, rawContent]);
+
+  // Auto-expand reasoning when it starts streaming, and auto-collapse when it finishes
+  useEffect(() => {
+    if (isStreamingActive && reasoning) {
+      if (!isThinkingFinished) {
+        // Keep reasoning visible while it is streaming
+        setShowReasoning(true);
+      } else if (!hasAutoCollapsedRef.current) {
+        // Automatically hide it the moment the reasoning concludes
+        setShowReasoning(false);
+        hasAutoCollapsedRef.current = true;
+      }
+    }
+  }, [isStreamingActive, reasoning, isThinkingFinished]);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const mentionedPersona = extractMentionedPersona(previousMessage);
   const displayPersona = mentionedPersona || currentPersona;
@@ -214,6 +236,11 @@ function AIMessageComponent({
     }
   }, [audioUrl, content]);
 
+  const cleanContentRef = useRef(cleanContent);
+  cleanContentRef.current = cleanContent;
+  const isStreamingActiveRef = useRef(isStreamingActive);
+  isStreamingActiveRef.current = isStreamingActive;
+
   // Memoize MarkdownComponents to prevent re-creating on every render
   // This is critical to prevent GeneratedImage from re-mounting on parent re-renders
   const MarkdownComponents = useMemo(() => ({
@@ -268,7 +295,23 @@ function AIMessageComponent({
         const langMatch = /language-(\w+)/.exec(child.props.className || '');
         const language = langMatch ? langMatch[1] : undefined;
         const code = String(child.props.children || '').replace(/\n$/, '');
-        return <CodeBlock language={language} code={code} themeText={theme.text} />;
+
+        // Determine if this code block has finished streaming
+        const isComplete = !isStreamingActiveRef.current || (() => {
+          const index = cleanContentRef.current.lastIndexOf(code);
+          if (index === -1) return false;
+          const afterCode = cleanContentRef.current.substring(index + code.length);
+          return afterCode.includes('```');
+        })();
+
+        return (
+          <CodeBlock
+            language={language}
+            code={code}
+            themeText={theme.text}
+            isComplete={isComplete}
+          />
+        );
       }
       // Fallback for non-code children
       return (
@@ -305,6 +348,57 @@ function AIMessageComponent({
       );
     },
   }), [theme.text, personaColor, displayPersona]);
+
+  // Dedicated components for reasoning content to keep everything consistently grey/zinc-styled
+  const ReasoningMarkdownComponents = useMemo(() => ({
+    h1: ({ children }: { children: React.ReactNode }) => (
+      <h1 className="text-base font-bold mt-3 mb-2 text-zinc-300">{children}</h1>
+    ),
+    h2: ({ children }: { children: React.ReactNode }) => (
+      <h2 className="text-sm font-bold mt-2.5 mb-2 text-zinc-300">{children}</h2>
+    ),
+    h3: ({ children }: { children: React.ReactNode }) => (
+      <h3 className="text-sm font-semibold mt-2 mb-1.5 text-zinc-300">{children}</h3>
+    ),
+    p: ({ children }: { children: React.ReactNode }) => (
+      <p className="mb-3 leading-relaxed text-zinc-400">{children}</p>
+    ),
+    strong: ({ children }: { children: React.ReactNode }) => (
+      <strong className="font-bold text-zinc-300">{children}</strong>
+    ),
+    em: ({ children }: { children: React.ReactNode }) => (
+      <em className="italic text-zinc-400/80">{children}</em>
+    ),
+    ul: ({ children }: { children: React.ReactNode }) => (
+      <ul className="list-disc ml-4 mb-3 space-y-1.5 text-zinc-400">{children}</ul>
+    ),
+    ol: ({ children }: { children: React.ReactNode }) => (
+      <ol className="list-decimal ml-4 mb-3 space-y-1.5 text-zinc-400">{children}</ol>
+    ),
+    li: ({ children }: { children: React.ReactNode }) => (
+      <li className="leading-relaxed text-zinc-400">{children}</li>
+    ),
+    blockquote: ({ children }: { children: React.ReactNode }) => (
+      <blockquote className="border-l-4 border-zinc-600 pl-4 my-3 italic text-zinc-500">
+        {children}
+      </blockquote>
+    ),
+    code: ({ className, children }: { className?: string; children: React.ReactNode }) => {
+      return (
+        <code className="bg-white/10 rounded px-1.5 py-0.5 text-xs font-mono text-zinc-300">
+          {children}
+        </code>
+      );
+    },
+    pre: ({ children }: { children: React.ReactNode }) => {
+      return (
+        <pre className="bg-white/5 rounded-lg p-3 mb-3 overflow-x-auto font-mono text-xs text-zinc-400 border border-white/5">
+          {children}
+        </pre>
+      );
+    },
+    img: () => null, // Don't render images inside reasoning
+  }), []);
 
   // Inline the message content JSX - DO NOT use a function component here
   // as it would cause remounting on every parent re-render
@@ -353,8 +447,8 @@ function AIMessageComponent({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
                   rehypePlugins={[rehypeKatex]}
-                  components={MarkdownComponents}
-                  className={`text-sm ${theme.text}`}
+                  components={ReasoningMarkdownComponents}
+                  className="text-sm text-zinc-400"
                 >
                   {reasoning}
                 </ReactMarkdown>
