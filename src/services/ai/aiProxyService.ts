@@ -48,7 +48,7 @@ export async function generateAIResponseStreaming(
   userId?: string,
   userMemories?: UserMemoryContext,
   specialMode?: string,
-  onStatusChange?: (status: 'analyzing_photo' | 'thinking') => void,
+  onStatusChange?: (status: string) => void,
   pdfData?: string,
   pdfFileName?: string,
   pdfExtractedText?: string,
@@ -125,6 +125,21 @@ export async function generateAIResponseStreaming(
           if (onStatusChange) onStatusChange('thinking');
         }
 
+        // Check for custom tool/status markers
+        if (chunk.includes('[STATUS:')) {
+          const regex = /\[STATUS:(.*?)\]/g;
+          let match;
+          while ((match = regex.exec(chunk)) !== null) {
+            const statusText = match[1];
+            if (onStatusChange) onStatusChange(statusText);
+          }
+          chunk = chunk.replace(/\[STATUS:.*?\]/g, '');
+        }
+        if (chunk.includes('[STATUS_END]')) {
+          chunk = chunk.replaceAll('[STATUS_END]', '');
+          if (onStatusChange) onStatusChange('thinking');
+        }
+
         // Check for audio URL marker
         const audioMatch = chunk.match(/\[AUDIO_URL\](.*?)\[\/AUDIO_URL\]/);
         if (audioMatch) {
@@ -150,9 +165,9 @@ export async function generateAIResponseStreaming(
       }
 
       // Extract reasoning and clean content
-      const reasonMatch = fullContent.match(/<reason>([\s\S]*?)<\/reason>/);
-      const thinking = reasonMatch ? reasonMatch[1].trim() : undefined;
-      const cleanContent = fullContent.replace(/<reason>[\s\S]*?<\/reason>/, '').trim();
+      const reasoningBlocks = [...fullContent.matchAll(/<reason>([\s\S]*?)<\/reason>/gi)].map(m => m[1].trim());
+      const thinking = reasoningBlocks.length > 0 ? reasoningBlocks.join('\n\n') : undefined;
+      const cleanContent = fullContent.replace(/<reason>[\s\S]*?<\/reason>/gi, '').trim();
 
       if (onComplete) {
         onComplete({

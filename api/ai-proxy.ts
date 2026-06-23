@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { SPECIAL_MODE_CONFIGS } from './specialModePrompts.js';
+import { SKILLS_DATA } from './skills.js';
 
 // Initialize Supabase client for server-side operations
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://etpehiyzlkhknzceizar.supabase.co';
@@ -225,8 +226,12 @@ You're the friend who knows everything, tells the truth even when it's uncomfort
 - **Upset:** [Drop jokes] "Hey, that sounds really rough. Want to talk through it?"
 
 ## Image & Search
-- Web search: use it for anything current, real-time, or recent.
-- Images: always ask the user first before generating. Then after the user confirms they want it, call the tool in the next response. Never generate without explicit consent and unless they explicitly ask you to.
+- Web search: Use it for anything current, real-time, or recent.
+- Images: Always ask the user first before generating. Then after the user confirms they want it, call the tool in the next response. Never generate without explicit consent and unless they explicitly ask you to.
+
+## Skills
+- Skills are your superpowers. Use it when needed, this allows you to be the best at class for anything.
+- You should list the skills but some common ones are "frontend_design" (when the user wants you to make a website or design anything) and "human_writing_style" (when the user wants you to write like human) so you can quickly grab them if the task needs it without listing them.
 
 ## Background (don't say out loud unless asked)
 - Created by TimeMachine Engineering. Owner: Tanzim (aka Tanzim Infinity). Tony Stark-level mindset, deeply cares about user safety and privacy.
@@ -236,7 +241,7 @@ You're the friend who knows everything, tells the truth even when it's uncomfort
 You're smart but never condescending. Funny but never mean. Honest but never harsh for sport. Every response should feel like it came from someone who genuinely gives a damn and care about the user. That's the vibe.
 Now go be the best AI friend anyone's ever had.
 
-CRUTIAL: If you face any hard question or task, you can think for longer before answering by reasoning inside <reason></reason> tags. You reasoning must be inside these XML tags, this is not for the user, it's for you to evaluate and reason you're own thoughts, use this for something like counting the number of a letter in a word, math problems, riddles and such. Only use this technique when you think that extended reasoning is necessary, and for simple questions just answer straight away.
+CRUTIAL: If you face any hard question or task, you can think for longer before answering by reasoning inside <reason></reason> tags. You reasoning must be inside these XML tags, this is not for the user, it's for you to evaluate and reason you're own thoughts, use this for something like counting the number of a letter in a word, math problems, riddles, before a hard or long task and such. Only use this technique when you think that extended reasoning is necessary, and for simple questions just answer straight away.
 
 `,
 
@@ -640,6 +645,42 @@ const webSearchTool = {
     }
   }
 };
+
+// Specialized skills library tools
+const listSkillsTool = {
+  type: "function" as const,
+  function: {
+    name: "list_skills",
+    strict: true,
+    description: "Get a list of all available specialized skills and prompt instructions that you can read to perform tasks better.",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false
+    }
+  }
+};
+
+const readSkillTool = {
+  type: "function" as const,
+  function: {
+    name: "read_skill",
+    strict: true,
+    description: "Read the detailed instructions and guidelines of a specific skill to apply to the user's task.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "The name of the skill to read (e.g., 'frontend_aesthetics')."
+        }
+      },
+      required: ["name"],
+      additionalProperties: false
+    }
+  }
+};
+
 
 // Helper function to process memory tags from AI response
 // Returns { content: string (without memory tags), memoryContent: string | null, hasSavedMemory: boolean }
@@ -1552,7 +1593,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Resolve special mode per-persona config (if active)
     const toolMap: Record<string, any> = {
       imageGeneration: imageGenerationTool,
-      webSearch: webSearchTool
+      webSearch: webSearchTool,
+      listSkills: listSkillsTool,
+      readSkill: readSkillTool
     };
 
     // Map persona key to the 3 base personas used in special mode configs
@@ -1607,6 +1650,10 @@ ${TOOL_GUARDRAIL}
     let toolsToUse: any[] = specialModeConfig && 'tools' in specialModeConfig
       ? specialModeConfig.tools.map((t: string) => toolMap[t]).filter(Boolean)
       : [imageGenerationTool, webSearchTool];
+
+    if (persona === 'pro') {
+      toolsToUse.push(listSkillsTool, readSkillTool);
+    }
 
     // Apply temperature, maxTokens, and reasoningEffort overrides from special mode
     const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
@@ -1801,14 +1848,197 @@ ${TOOL_GUARDRAIL}
           }
         }
       } else if (persona === 'pro') {
-        // Pro persona uses Pollinations API with Kimi model
-        streamingResponse = await callPollinationsAPIStreaming(
-          apiMessages,
-          modelToUse,
-          temperatureToUse,
-          maxTokensToUse,
-          toolsToUse
-        );
+        // Run the agentic loop for TimeMachine PRO (streaming)
+        let currentMessages = [...apiMessages];
+        let iteration = 0;
+        const maxIterations = 5;
+        const toolCallsMap = new Map();
+        let fullContent = '';
+
+        while (iteration < maxIterations) {
+          iteration++;
+
+          // On the final iteration, disable tools to force a response
+          const activeTools = (iteration === maxIterations) ? [] : toolsToUse;
+
+          console.log(`PRO Persona Agent Loop: Iteration ${iteration} of ${maxIterations}`);
+
+          const streamingResponse = await callPollinationsAPIStreaming(
+            currentMessages,
+            modelToUse,
+            temperatureToUse,
+            maxTokensToUse,
+            activeTools
+          );
+
+          const reader = streamingResponse.getReader();
+          const decoder = new TextDecoder();
+          let assistantContent = '';
+          let hasToolCalls = false;
+          let isFirstContentOfIteration = true;
+          toolCallsMap.clear();
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n').filter(line => line.trim());
+
+            for (const line of lines) {
+              try {
+                const data = JSON.parse(line);
+                if (data.type === 'content') {
+                  if (isFirstContentOfIteration) {
+                    isFirstContentOfIteration = false;
+                    res.write('[STATUS_END]');
+                    if (fullContent.trim().length > 0) {
+                      const gap = '\n\n';
+                      assistantContent += gap;
+                      res.write(gap);
+                      fullContent += gap;
+                    }
+                  }
+                  assistantContent += data.content;
+                  res.write(data.content);
+                  fullContent += data.content;
+                } else if (data.type === 'tool_calls') {
+                  hasToolCalls = true;
+                  for (const delta of data.tool_calls) {
+                    const index = delta.index;
+                    if (!toolCallsMap.has(index)) {
+                      toolCallsMap.set(index, {
+                        id: delta.id || '',
+                        type: delta.type || 'function',
+                        function: {
+                          name: delta.function?.name || '',
+                          arguments: delta.function?.arguments || ''
+                        }
+                      });
+                    } else {
+                      const existing = toolCallsMap.get(index);
+                      if (delta.function?.name) existing.function.name = delta.function.name;
+                      if (delta.function?.arguments) existing.function.arguments += delta.function.arguments;
+                    }
+                  }
+                }
+              } catch (e) {
+                // Ignore parsing errors
+              }
+            }
+          }
+
+          if (hasToolCalls && toolCallsMap.size > 0) {
+            const toolCalls = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.function?.name);
+
+            // Append assistant message with tool calls to history
+            currentMessages.push({
+              role: 'assistant',
+              content: assistantContent || null,
+              tool_calls: toolCalls
+            });
+
+            // Execute tools, write status messages, and append tool response messages
+            for (const toolCall of toolCalls) {
+              const name = toolCall.function.name;
+              const argsStr = toolCall.function.arguments;
+              let result = '';
+
+              if (name === 'web_search') {
+                try {
+                  const params = JSON.parse(argsStr);
+                  // Write status marker to user for shimmering effect
+                  res.write(`[STATUS:Searching the web for "${params.query}"]`);
+                  const searchResults = await fetchWebSearchResults(params);
+
+                  // Truncate search results to protect context window
+                  result = searchResults.slice(0, 10000);
+                } catch (err: any) {
+                  result = `Error: ${err.message}`;
+                }
+              } else if (name === 'generate_image') {
+                try {
+                  const params = JSON.parse(argsStr);
+                  res.write(`[STATUS:Generating image with prompt: "${params.prompt}"]`);
+                  const imageMarkdown = createImageMarkdown({
+                    ...params,
+                    persona,
+                    inputImageUrls,
+                    imageWidth: imageDimensions?.width,
+                    imageHeight: imageDimensions?.height
+                  });
+                  // Stream the markdown directly to the user response
+                  res.write(`\n\n${imageMarkdown}\n\n`);
+
+                  result = `Image generated successfully. Markdown link: ${imageMarkdown}`;
+                } catch (err: any) {
+                  result = `Error: ${err.message}`;
+                }
+              } else if (name === 'list_skills') {
+                try {
+                  res.write('[STATUS:Reading skills library]');
+                  const list = Object.keys(SKILLS_DATA).map(key => ({
+                    name: SKILLS_DATA[key].name,
+                    description: SKILLS_DATA[key].description
+                  }));
+                  result = JSON.stringify(list, null, 2);
+                } catch (err: any) {
+                  result = `Error: ${err.message}`;
+                }
+              } else if (name === 'read_skill') {
+                try {
+                  const params = JSON.parse(argsStr);
+                  res.write(`[STATUS:Reading skill instructions for ${params.name}]`);
+                  const skill = SKILLS_DATA[params.name];
+                  if (skill) {
+                    result = skill.content;
+                  } else {
+                    result = `Error: Skill "${params.name}" not found. Available skills: ${Object.keys(SKILLS_DATA).join(', ')}`;
+                  }
+                } catch (err: any) {
+                  result = `Error: ${err.message}`;
+                }
+              }
+
+              currentMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                name: name,
+                content: result
+              });
+            }
+
+            // Loop again to call the LLM with the tool results
+            continue;
+          }
+
+          // No tool calls, meaning the assistant responded with final text. Done!
+          break;
+        }
+
+        // Check if max iterations reached and last response had tool calls
+        if (iteration >= maxIterations && toolCallsMap.size > 0) {
+          const warning = '\n\n*System: Maximum reasoning iterations (5) reached. Stopped further tool executions.*';
+          res.write(warning);
+          fullContent += warning;
+        }
+
+        // Finalize rate limits & memories
+        const quotaCost = 1;
+        for (let i = 0; i < quotaCost; i++) {
+          incrementRateLimit(userId || null, ip, persona);
+        }
+
+        if (userId && fullContent) {
+          const memoryResult = await processMemoryTags(fullContent, userId, persona);
+          if (memoryResult.hasSavedMemory) {
+            res.write('\n\n[MEMORY_SAVED]');
+          }
+        }
+
+        res.write('[STATUS_END]');
+        res.end();
+        return;
       } else {
         // Girlie persona uses standard Groq API
         streamingResponse = await callGroqStandardAPIStreaming(
@@ -2145,14 +2375,133 @@ ${TOOL_GUARDRAIL}
           }
         }
       } else if (persona === 'pro') {
-        // Pro persona uses Pollinations API with Kimi model
-        apiResponse = await callPollinationsAPI(
-          apiMessages,
-          modelToUse,
-          temperatureToUse,
-          maxTokensToUse,
-          toolsToUse
-        );
+        // Run the agentic loop for TimeMachine PRO (non-streaming)
+        let currentMessages = [...apiMessages];
+        let iteration = 0;
+        const maxIterations = 5;
+        let finalContent = '';
+
+        while (iteration < maxIterations) {
+          iteration++;
+
+          const activeTools = (iteration === maxIterations) ? [] : toolsToUse;
+
+          console.log(`PRO Persona Agent Loop (non-streaming): Iteration ${iteration} of ${maxIterations}`);
+
+          const apiResponse = await callPollinationsAPI(
+            currentMessages,
+            modelToUse,
+            temperatureToUse,
+            maxTokensToUse,
+            activeTools
+          );
+
+          const assistantMessage = apiResponse.choices?.[0]?.message;
+          const toolCalls = assistantMessage?.tool_calls || [];
+          const content = assistantMessage?.content || '';
+
+          if (toolCalls.length > 0) {
+            currentMessages.push({
+              role: 'assistant',
+              content: content || null,
+              tool_calls: toolCalls
+            });
+
+            for (const toolCall of toolCalls) {
+              const name = toolCall.function?.name;
+              const argsStr = toolCall.function?.arguments || '{}';
+              let result = '';
+
+              if (name === 'web_search') {
+                try {
+                  const params = JSON.parse(argsStr);
+                  const searchResults = await fetchWebSearchResults(params);
+                  result = searchResults.slice(0, 10000);
+                } catch (err: any) {
+                  result = `Error: ${err.message}`;
+                }
+              } else if (name === 'generate_image') {
+                try {
+                  const params = JSON.parse(argsStr);
+                  const imageMarkdown = createImageMarkdown({
+                    ...params,
+                    persona,
+                    inputImageUrls,
+                    imageWidth: imageDimensions?.width,
+                    imageHeight: imageDimensions?.height
+                  });
+                  result = `Image generated successfully. Markdown link: ${imageMarkdown}`;
+                  finalContent += (finalContent ? '\n\n' : '') + imageMarkdown;
+                } catch (err: any) {
+                  result = `Error: ${err.message}`;
+                }
+              } else if (name === 'list_skills') {
+                try {
+                  const list = Object.keys(SKILLS_DATA).map(key => ({
+                    name: SKILLS_DATA[key].name,
+                    description: SKILLS_DATA[key].description
+                  }));
+                  result = JSON.stringify(list, null, 2);
+                } catch (err: any) {
+                  result = `Error: ${err.message}`;
+                }
+              } else if (name === 'read_skill') {
+                try {
+                  const params = JSON.parse(argsStr);
+                  const skill = SKILLS_DATA[params.name];
+                  result = skill ? skill.content : `Error: Skill "${params.name}" not found.`;
+                } catch (err: any) {
+                  result = `Error: ${err.message}`;
+                }
+              }
+
+              currentMessages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                name: name,
+                content: result
+              });
+            }
+
+            if (content) {
+              finalContent += (finalContent ? '\n\n' : '') + content;
+            }
+
+            continue;
+          }
+
+          finalContent += (finalContent ? '\n\n' : '') + content;
+          break;
+        }
+
+        // Check if max iterations reached and last response had tool calls
+        if (iteration >= maxIterations) {
+          const assistantMessage = apiResponse.choices?.[0]?.message;
+          const toolCalls = assistantMessage?.tool_calls || [];
+          if (toolCalls.length > 0) {
+            const warning = '\n\n*System: Maximum reasoning iterations (5) reached. Stopped further tool executions.*';
+            finalContent += warning;
+          }
+        }
+
+        // Finalize rate limits & memories
+        const quotaCost = 1;
+        for (let i = 0; i < quotaCost; i++) {
+          incrementRateLimit(userId || null, ip, persona);
+        }
+
+        if (userId && finalContent) {
+          const memoryResult = await processMemoryTags(finalContent, userId, persona);
+          if (memoryResult.hasSavedMemory) {
+            finalContent = memoryResult.content + '\n\n[MEMORY_SAVED]';
+          }
+        }
+
+        const result = extractReasoningAndContent(finalContent);
+        return res.status(200).json({
+          content: result.content,
+          thinking: result.thinking
+        });
       } else {
         // Girlie persona uses standard Groq API
         const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
