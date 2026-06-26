@@ -672,7 +672,7 @@ const readSkillTool = {
       properties: {
         name: {
           type: "string",
-          description: "The name of the skill to read (e.g., 'frontend_aesthetics')."
+          description: "The name of the skill to read (e.g., 'frontend_design')."
         }
       },
       required: ["name"],
@@ -1712,18 +1712,23 @@ ${TOOL_GUARDRAIL}
       }
     }
 
-    // PDF text injection: enrich the last user message with the full PDF content
+    // Document text injection: enrich the last user message with the file content
     if (pdfTextContent && apiMessages.length > 0) {
       const lastMsgIndex = apiMessages.length - 1;
       const lastMsg = apiMessages[lastMsgIndex];
-      const userPrompt = lastMsg.content?.startsWith('[PDF:') ? '' : (lastMsg.content || '');
-      const pdfLabel = pdfFileName ? `"${pdfFileName}"` : 'the uploaded PDF';
+      const isPlaceholderOnly = lastMsg.content?.startsWith('[PDF:') || lastMsg.content?.startsWith('[File:');
+      const userPrompt = isPlaceholderOnly ? '' : (lastMsg.content || '');
+      const ext = pdfFileName?.split('.').pop()?.toLowerCase() || '';
+      const isPdf = ext === 'pdf';
+      const fileLabel = pdfFileName ? `"${pdfFileName}"` : (isPdf ? 'the uploaded PDF' : 'the uploaded file');
 
-      const pdfContext = `<pdf_document name=${JSON.stringify(pdfLabel)}>\n${pdfTextContent}\n</pdf_document>`;
+      const fileContext = isPdf
+        ? `<pdf_document name=${JSON.stringify(fileLabel)}>\n${pdfTextContent}\n</pdf_document>`
+        : `<uploaded_file name=${JSON.stringify(fileLabel)} type=${JSON.stringify(ext)}>\n${pdfTextContent}\n</uploaded_file>`;
 
       const enrichedContent = userPrompt
-        ? `${pdfContext}\n\nUser's question about ${pdfLabel}: ${userPrompt}`
-        : `${pdfContext}\n\nThe user uploaded ${pdfLabel}. Please provide a comprehensive summary of the document above.`;
+        ? `${fileContext}\n\nUser's question about ${fileLabel}: ${userPrompt}`
+        : `${fileContext}\n\nThe user uploaded ${fileLabel}. Please provide a comprehensive summary of the document above.`;
 
       apiMessages[lastMsgIndex] = { ...lastMsg, content: enrichedContent };
     }
