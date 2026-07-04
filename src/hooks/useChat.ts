@@ -125,6 +125,9 @@ export function useChat(
   // Track if streaming is in progress - don't save during streaming (AI message is incomplete)
   const isStreamingRef = useRef<boolean>(false);
 
+  // Track if there are unsaved changes in this session to prevent auto-saves on initial loads
+  const isDirtyRef = useRef(false);
+
   // Update chatService with userId when it changes
   useEffect(() => {
     chatService.setUserId(userId || null);
@@ -392,6 +395,7 @@ export function useChat(
       }
     }
 
+    isDirtyRef.current = true; // Mark as dirty when completing message
     // Update the message with final content
     setMessages(prev => {
       const updatedMessages = prev.map(msg =>
@@ -491,8 +495,10 @@ export function useChat(
     // - No session ID
     // - Currently streaming (AI message is incomplete)
     // - In collaborative mode (messages are stored in group_chat_messages table)
-    if (messages.length > 1 && currentSessionId && !isStreamingRef.current && !isCollaborative) {
+    // - Not dirty (to prevent auto-save on initial load from history)
+    if (isDirtyRef.current && messages.length > 1 && currentSessionId && !isStreamingRef.current && !isCollaborative) {
       saveChatSession(currentSessionId, messages, currentPersona);
+      isDirtyRef.current = false; // Reset dirty flag after scheduling save
     }
   }, [messages, currentSessionId, currentPersona, saveChatSession, isCollaborative]);
 
@@ -607,6 +613,7 @@ export function useChat(
       imageDimensions: imageDimensions
     };
 
+    isDirtyRef.current = true; // Mark as dirty on user message send
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
     setError(null);
@@ -835,6 +842,7 @@ export function useChat(
     setPersonaTheme(session.persona);
     setError(null);
     setActivePdfText(null); // Clear PDF context when loading a different chat
+    isDirtyRef.current = false; // Reset dirty state on load
 
     // Set heat level if it's a pro session
     if (session.heat_level) {
@@ -1089,6 +1097,7 @@ export function useChat(
 
   // Update reactions on a specific message
   const updateMessageReactions = useCallback((messageId: number, reactions: Record<string, string[]>) => {
+    isDirtyRef.current = true;
     setMessages(prev => prev.map(msg =>
       msg.id === messageId ? { ...msg, reactions } : msg
     ));
@@ -1097,6 +1106,7 @@ export function useChat(
   // Update music variations (Supabase URLs) on a specific message
   // Called when MusicComposeCard finishes uploading to Supabase
   const updateMusicVariations = useCallback((messageId: number, variations: MusicVariation[]) => {
+    isDirtyRef.current = true;
     setMessages(prev => {
       const updated = prev.map(msg =>
         msg.id === messageId ? { ...msg, musicVariations: variations } : msg
