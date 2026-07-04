@@ -37,7 +37,8 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.0",
     "remark-math": "^6.0.0",
-    "tailwind-merge": "^2.2.1"
+    "tailwind-merge": "^2.2.1",
+    "yt-search": "^2.13.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
