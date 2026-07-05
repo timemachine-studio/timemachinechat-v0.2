@@ -18,7 +18,7 @@ export const AI_PERSONAS = {
     maxTokens: 17700,
     flowState: {
       provider: 'cerebras',
-      model: 'zai-glm-4.7',
+      model: 'gpt-oss-120b',
       temperature: 0.8,
       maxTokens: 27700,
       quotaCost: 2
