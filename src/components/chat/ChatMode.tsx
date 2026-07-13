@@ -155,7 +155,7 @@ export function ChatMode({
                 </div>
 
                 {/* Quick access pills */}
-                <div className="flex items-center gap-2.5 mt-8">
+                <div className="mt-8 grid w-full grid-cols-3 gap-1.5 sm:flex sm:w-auto sm:items-center sm:gap-2.5">
                   {([
                     { label: 'Notes', icon: BookOpen, onClick: () => navigate('/notes') },
                     { label: 'Healthcare', icon: HeartPulse, onClick: () => navigate('/healthcare') },
@@ -169,7 +169,7 @@ export function ChatMode({
                       whileHover={{ scale: 1.04, y: -1 }}
                       whileTap={{ scale: 0.97 }}
                       onClick={item.onClick}
-                      className="reveoule-action-pill flex items-center gap-2 px-4 py-2.5 rounded-full text-white/50 hover:text-white/80 transition-colors duration-200"
+                      className="reveoule-action-pill flex min-w-0 items-center justify-center gap-1.5 rounded-full px-2.5 py-2.5 text-white/50 transition-colors duration-200 hover:text-white/80 sm:gap-2 sm:px-4"
                       style={{
                         background: 'rgba(255, 255, 255, 0.04)',
                         backdropFilter: 'blur(20px)',
@@ -179,7 +179,7 @@ export function ChatMode({
                       }}
                     >
                       <item.icon className="w-3.5 h-3.5" />
-                      <span className="text-xs font-medium tracking-wide">{item.label}</span>
+                      <span className="truncate text-[11px] font-medium tracking-wide sm:text-xs">{item.label}</span>
                     </motion.button>
                   ))}
                 </div>
