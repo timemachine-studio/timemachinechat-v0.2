@@ -141,7 +141,7 @@ export function ChatMode({
               transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
               className="h-[calc(100vh-16rem)] flex items-center justify-center"
             >
-              <div className="flex flex-col items-start px-4">
+              <div className="flex w-full max-w-[23rem] flex-col items-start px-2 sm:w-auto sm:max-w-none sm:px-4">
                 <div className="text-lg sm:text-xl font-normal text-neutral-400 text-left">
                   <div className="flex items-center">
                     <span>Start a</span>
@@ -155,7 +155,7 @@ export function ChatMode({
                 </div>
 
                 {/* Quick access pills */}
-                <div className="mt-8 grid w-full grid-cols-3 gap-1.5 sm:flex sm:w-auto sm:items-center sm:gap-2.5">
+                <div className="mt-8 flex w-full items-center justify-center gap-2 sm:w-auto sm:justify-start sm:gap-2.5">
                   {([
                     { label: 'Notes', icon: BookOpen, onClick: () => navigate('/notes') },
                     { label: 'Healthcare', icon: HeartPulse, onClick: () => navigate('/healthcare') },
@@ -169,7 +169,7 @@ export function ChatMode({
                       whileHover={{ scale: 1.04, y: -1 }}
                       whileTap={{ scale: 0.97 }}
                       onClick={item.onClick}
-                      className="reveoule-action-pill flex min-w-0 items-center justify-center gap-1.5 rounded-full px-2.5 py-2.5 text-white/50 transition-colors duration-200 hover:text-white/80 sm:gap-2 sm:px-4"
+                      className="reveoule-action-pill flex shrink-0 items-center justify-center gap-1.5 rounded-full px-3.5 py-2.5 text-white/50 transition-colors duration-200 hover:text-white/80 sm:gap-2 sm:px-4"
                       style={{
                         background: 'rgba(255, 255, 255, 0.04)',
                         backdropFilter: 'blur(20px)',
@@ -179,7 +179,7 @@ export function ChatMode({
                       }}
                     >
                       <item.icon className="w-3.5 h-3.5" />
-                      <span className="truncate text-[11px] font-medium tracking-wide sm:text-xs">{item.label}</span>
+                      <span className="text-xs font-medium tracking-wide">{item.label}</span>
                     </motion.button>
                   ))}
                 </div>
