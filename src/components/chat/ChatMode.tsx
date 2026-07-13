@@ -1,7 +1,7 @@
 import React, { useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { BookOpen, HeartPulse, Sparkles } from 'lucide-react';
+import { BookOpen, HeartPulse } from 'lucide-react';
 import { ChatMessage } from './ChatMessage';
 import { Message } from '../../types/chat';
 import { AI_PERSONAS } from '../../config/constants';
@@ -9,6 +9,7 @@ import { useTheme } from '../../context/ThemeContext';
 import { FlipWords } from '../ui/FlipWords';
 import { BrandOverride } from '../brand/BrandLogo';
 import type { SavedVariation } from './MusicComposeCard';
+import { SesameMark } from '../icons/SesameMark';
 
 interface ReplyTo {
   id: number;
@@ -30,6 +31,7 @@ interface ChatModeProps {
   onReact?: (messageId: number, emoji: string) => void;
   brandOverride?: BrandOverride;
   onMusicVariationsChange?: (messageId: number, variations: SavedVariation[]) => void;
+  onOpenSesame: () => void;
 }
 
 export function ChatMode({
@@ -44,7 +46,8 @@ export function ChatMode({
   onReply,
   onReact,
   brandOverride,
-  onMusicVariationsChange
+  onMusicVariationsChange,
+  onOpenSesame
 }: ChatModeProps) {
   const { theme } = useTheme();
   const navigate = useNavigate();
@@ -154,9 +157,9 @@ export function ChatMode({
                 {/* Quick access pills */}
                 <div className="flex items-center gap-2.5 mt-8">
                   {([
-                    { label: 'Notes', icon: BookOpen, route: '/notes' },
-                    { label: 'Healthcare', icon: HeartPulse, route: '/healthcare' },
-                    { label: 'Lifestyle', icon: Sparkles, route: '/lifestyle' },
+                    { label: 'Notes', icon: BookOpen, onClick: () => navigate('/notes') },
+                    { label: 'Healthcare', icon: HeartPulse, onClick: () => navigate('/healthcare') },
+                    { label: 'Sesame', icon: SesameMark, onClick: onOpenSesame },
                   ] as const).map((item, i) => (
                     <motion.button
                       key={item.label}
@@ -165,7 +168,7 @@ export function ChatMode({
                       transition={{ duration: 0.4, delay: 0.3 + i * 0.08, ease: [0.22, 1, 0.36, 1] }}
                       whileHover={{ scale: 1.04, y: -1 }}
                       whileTap={{ scale: 0.97 }}
-                      onClick={() => navigate(item.route)}
+                      onClick={item.onClick}
                       className="reveoule-action-pill flex items-center gap-2 px-4 py-2.5 rounded-full text-white/50 hover:text-white/80 transition-colors duration-200"
                       style={{
                         background: 'rgba(255, 255, 255, 0.04)',
@@ -222,4 +225,3 @@ export function ChatMode({
     </div>
   );
 }
-

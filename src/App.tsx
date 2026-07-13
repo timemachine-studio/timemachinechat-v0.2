@@ -50,6 +50,7 @@ import { GroupChat } from './types/groupChat';
 import { ACCESS_TOKEN_REQUIRED, MAINTENANCE_MODE, PRO_HEAT_LEVELS, AI_PERSONAS } from './config/constants';
 import { ChatSession, getSupabaseSessions, getLocalSessions } from './services/chat/chatService';
 import { SEOHead } from './components/seo/SEOHead';
+import { SesamePanel } from './components/sesame/SesamePanel';
 
 // Chat by ID page component - defined OUTSIDE to prevent re-renders
 function ChatByIdPage() {
@@ -162,6 +163,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     : (!authLoading && savedPersona && savedPersona in AI_PERSONAS ? savedPersona : undefined);
 
   const [flowStateActive, setFlowStateActive] = useState(false);
+  const [isSesameOpen, setIsSesameOpen] = useState(false);
 
   const {
     messages,
@@ -963,7 +965,9 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
           {/* Regular chat mode */}
           {(!isGroupMode || isGroupParticipant) && (
             <>
-              {isLyricsMaximized && (lyricsTrack || lyricsIsLoading || lyricsError) ? (
+              {isSesameOpen ? (
+                <SesamePanel onClose={() => setIsSesameOpen(false)} />
+              ) : isLyricsMaximized && (lyricsTrack || lyricsIsLoading || lyricsError) ? (
                 <div className="flex-1 flex flex-col items-center justify-center p-4 relative min-h-[60vh] w-full">
                   {/* Minimize Button */}
                   <div className="absolute top-4 right-4 z-40">
@@ -1037,6 +1041,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                   onReact={isCollaborative ? handleReact : undefined}
                   brandOverride={brandOverride}
                   onMusicVariationsChange={updateMusicVariations}
+                  onOpenSesame={() => setIsSesameOpen(true)}
                 />
               ) : (
                 <StageMode
