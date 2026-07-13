@@ -171,13 +171,11 @@ export function useChat(
 
         if (firstUserMessage) {
           if (firstUserMessage.content && firstUserMessage.content.trim() &&
-            firstUserMessage.content !== '[Image message]' && firstUserMessage.content !== '[Audio message]' && 
+            firstUserMessage.content !== '[Image message]' &&
             !firstUserMessage.content.startsWith('[PDF:') && !firstUserMessage.content.startsWith('[File:')) {
             sessionName = firstUserMessage.content.slice(0, 50);
           } else if (firstUserMessage.imageData || (firstUserMessage.inputImageUrls && firstUserMessage.inputImageUrls.length > 0)) {
             sessionName = 'Image message';
-          } else if (firstUserMessage.audioData) {
-            sessionName = 'Audio message';
           } else if (firstUserMessage.pdfFileName) {
             const isPdf = firstUserMessage.pdfFileName.toLowerCase().endsWith('.pdf');
             sessionName = isPdf ? `PDF: ${firstUserMessage.pdfFileName}` : `File: ${firstUserMessage.pdfFileName}`;
@@ -550,7 +548,6 @@ export function useChat(
   const handleSendMessage = useCallback(async (
     content: string,
     imageData?: string | string[],
-    audioData?: string,
     inputImageUrls?: string[],
     imageDimensions?: ImageDimensions,
     replyTo?: { id: number; content: string; sender_nickname?: string; isAI: boolean },
@@ -569,11 +566,9 @@ export function useChat(
       messageContent = mentionMatch[2];
     }
 
-    // Handle audio/image/file data - if we have audio/images/files but no text content, create a message indicating the input type
+    // Add display text for image/file-only messages.
     let finalContent = messageContent;
-    if (audioData && !messageContent.trim()) {
-      finalContent = '[Audio message]'; // Placeholder text for UI
-    } else if ((imageData || (inputImageUrls && inputImageUrls.length > 0)) && !messageContent.trim()) {
+    if ((imageData || (inputImageUrls && inputImageUrls.length > 0)) && !messageContent.trim()) {
       finalContent = '[Image message]'; // Placeholder text for UI
     } else if (pdfData && !messageContent.trim()) {
       const isPdf = pdfFileName?.toLowerCase().endsWith('.pdf');
@@ -581,15 +576,14 @@ export function useChat(
     }
 
     // Create user message with content for display
-    // Use finalContent if it's a placeholder for image/audio/file-only messages, otherwise keep original content
-    const displayContent = (finalContent === '[Image message]' || finalContent === '[Audio message]' || finalContent.startsWith('[PDF:') || finalContent.startsWith('[File:')) ? finalContent : content;
+    // Use finalContent for attachment-only placeholders, otherwise keep the original content.
+    const displayContent = (finalContent === '[Image message]' || finalContent.startsWith('[PDF:') || finalContent.startsWith('[File:')) ? finalContent : content;
     const userMessage: Message = {
       id: Date.now(),
       content: displayContent, // Use placeholder for image/audio/pdf-only, otherwise original content
       isAI: false,
       hasAnimated: false,
       imageData: imageData,
-      audioData: audioData,
       inputImageUrls: inputImageUrls,
       imageDimensions: imageDimensions,
       pdfData: pdfData ? 'attached' : undefined, // Don't store full base64 in message state, just flag it
@@ -608,7 +602,6 @@ export function useChat(
       isAI: false,
       hasAnimated: false,
       imageData: imageData,
-      audioData: audioData,
       inputImageUrls: inputImageUrls,
       imageDimensions: imageDimensions
     };
@@ -689,7 +682,6 @@ export function useChat(
         imageData,
         '', // System prompt is now handled server-side
         messagePersona,
-        audioData,
         messagePersona === 'pro' ? currentProHeatLevel : undefined,
         inputImageUrls,
         imageDimensions,
@@ -713,7 +705,7 @@ export function useChat(
 
 
           setLoadingPhase(null);
-          completeStreamingMessage(aiMessageId, cleanedContent, response.thinking, response.audioUrl);
+          completeStreamingMessage(aiMessageId, cleanedContent, response.thinking);
         },
         // onError callback
         (error) => {
@@ -755,7 +747,6 @@ export function useChat(
           imageData,
           '', // System prompt is now handled server-side
           messagePersona,
-          audioData,
           messagePersona === 'pro' ? currentProHeatLevel : undefined,
           inputImageUrls,
           imageDimensions,
@@ -778,7 +769,7 @@ export function useChat(
 
 
         setLoadingPhase(null);
-        completeStreamingMessage(aiMessageId, cleanedContent, aiResponse.thinking, aiResponse.audioUrl);
+        completeStreamingMessage(aiMessageId, cleanedContent, aiResponse.thinking);
       } catch (error) {
         console.error('Failed to generate response:', error);
 

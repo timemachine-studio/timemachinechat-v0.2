@@ -1768,7 +1768,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { messages, persona = 'default', imageData, audioData, heatLevel = 2, stream = false, flowState = false, inputImageUrls, imageDimensions, userId, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText } = req.body;
+    const { messages, persona = 'default', imageData, heatLevel = 2, stream = false, flowState = false, inputImageUrls, imageDimensions, userId, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Invalid messages format' });
@@ -1881,13 +1881,11 @@ ${TOOL_GUARDRAIL}
     // pdfExtractedText = cached text from a previous upload in the same session (follow-up)
     const pdfTextContent = pdfData || pdfExtractedText || '';
 
-    // Audio processing removed (now using client-side STT)
     const processedMessages = [...messages];
-    const isAudioInput = false;
 
     let apiMessages;
     // Track if we need to run the image OCR pipeline before the main AI call
-    const hasImageInput = !!imageData && !isAudioInput;
+    const hasImageInput = !!imageData;
     const imageUrlsForOCR = hasImageInput ? (Array.isArray(imageData) ? imageData : [imageData]) : [];
 
     {
@@ -1992,7 +1990,7 @@ ${TOOL_GUARDRAIL}
           apiMessages,
           personaConfig.model
         );
-      } else if (persona === 'default' && !audioData) {
+      } else if (persona === 'default') {
         // Air persona — check Flow State first, then configured provider
         const flowConfig = (personaConfig as any).flowState;
         if (flowState && flowConfig) {
@@ -2511,7 +2509,7 @@ ${TOOL_GUARDRAIL}
           apiMessages,
           personaConfig.model
         );
-      } else if (persona === 'default' && !audioData) {
+      } else if (persona === 'default') {
         // Air persona — check Flow State first, then configured provider
         const flowConfig = (personaConfig as any).flowState;
         if (flowState && flowConfig) {
@@ -2977,7 +2975,7 @@ ${TOOL_GUARDRAIL}
       // Extract reasoning content for all personas
       const result = extractReasoningAndContent(fullContent);
 
-      // Send complete response as JSON (audioUrl generation removed)
+      // Send complete response as JSON
       return res.status(200).json({
         content: result.content,
         thinking: result.thinking

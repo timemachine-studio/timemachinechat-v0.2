@@ -122,7 +122,6 @@ export function HomePage() {
   const handleSendMessageWithRateLimit = useCallback(async (
     message: string,
     imageUrl?: string | string[],
-    audioData?: string,
     imageUrls?: string[],
     imageDimensions?: ImageDimensions,
     replyToData?: ReplyToData,
@@ -150,7 +149,7 @@ export function HomePage() {
 
     if (isAnonymous) incrementCount(targetModel);
 
-    await handleSendMessage(message, imageUrl, audioData, imageUrls, imageDimensions, replyToData, specialMode, pdfData, pdfFileName);
+    await handleSendMessage(message, imageUrl, imageUrls, imageDimensions, replyToData, specialMode, pdfData, pdfFileName);
   }, [currentPersona, isAnonymous, isRateLimited, incrementCount, handleSendMessage, navigate]);
 
   // Open in Chat UI — navigates to / and passes the current session so MainChatPage

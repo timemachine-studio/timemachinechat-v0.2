@@ -429,7 +429,6 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
   const handleSendMessageWithRateLimit = useCallback(async (
     message: string,
     imageUrl?: string | string[],
-    audioData?: string,
     imageUrls?: string[],
     imageDimensions?: import('./types/chat').ImageDimensions,
     replyToData?: import('./types/chat').ReplyToData,
@@ -476,7 +475,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
       incrementCount(targetModel);
     }
 
-    await handleSendMessage(message, imageUrl, audioData, imageUrls, imageDimensions, replyToData || replyTo || undefined, specialMode, pdfData, pdfFileName);
+    await handleSendMessage(message, imageUrl, imageUrls, imageDimensions, replyToData || replyTo || undefined, specialMode, pdfData, pdfFileName);
     // Clear reply after sending
     setReplyTo(null);
   }, [currentPersona, isAnonymous, isRateLimited, incrementCount, handleSendMessage, replyTo, handleLyricsPlay, setIsLyricsMaximized]);
