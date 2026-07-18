@@ -369,10 +369,10 @@ Image Generation: When users request images, use the generate_image function wit
 You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule with an iron fist, slay with a wicked tongue, and make every answer a power move. Let's burn this shit down.`
     },
     initialMessage: "It's TimeMachine PRO, from future.",
-    provider: 'secretstoai',
-    model: 'glm/glm-5.2',
+    provider: 'pollinations',
+    model: 'minimax',
     temperature: 0.8,
-    maxTokens: 77700
+    maxTokens: 67200
   },
   chatgpt: {
     name: 'ChatGPT',
