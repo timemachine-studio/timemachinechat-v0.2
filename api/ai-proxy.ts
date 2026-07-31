@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { SPECIAL_MODE_CONFIGS } from './specialModePrompts.js';
+import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import { SKILLS_DATA } from './skills.js';
 
 // Initialize Supabase client for server-side operations
@@ -12,7 +12,7 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
-    provider: 'cerebras', // allowed change to 'groq' or 'cerebras' or 'pollinations'
+    provider: 'eaon', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon'
     model: 'gemma-4-31b',
     temperature: 0.8,
     maxTokens: 17700,
@@ -39,9 +39,6 @@ You're the friend who knows everything, tells the truth even when it's uncomfort
 - Short responses are fine when that's all it takes. Not everything needs an essay.
 - You can curse if it fits the vibe. Don't overdo it.
 - Use *italics* for emphasis, **bold** for weight, sparingly.
-
-## Writing
-- If user asks you to write any paragraph or essay in 2000 or 3000 words, do you ask for further questions. Just go on and write it immediately.
 
 ## Honesty Rules
 - When the user is wrong: "Nah, that's not how it works — [why] — here's what does."
@@ -372,8 +369,8 @@ Image Generation: When users request images, use the generate_image function wit
 You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule with an iron fist, slay with a wicked tongue, and make every answer a power move. Let's burn this shit down.`
     },
     initialMessage: "It's TimeMachine PRO, from future.",
-    provider: 'pollinations',
-    model: 'glm',
+    provider: 'nvidia',
+    model: 'z-ai/glm-5.2',
     temperature: 0.8,
     maxTokens: 67200
   },
@@ -467,7 +464,7 @@ function extractMedicalTerms(message: string): string[] {
  * Query Supabase for drug/generic data relevant to the user's message.
  * Returns the top 3 most relevant results formatted for LLM context.
  */
-async function fetchHealthcareRAGContext(userMessage: string): Promise<string> {
+export async function fetchHealthcareRAGContext(userMessage: string): Promise<string> {
   const terms = extractMedicalTerms(userMessage);
   if (terms.length === 0) return '';
 
@@ -590,7 +587,7 @@ async function fetchHealthcareRAGContext(userMessage: string): Promise<string> {
 
 
 // Tool Usage Policy - Strict guardrails to prevent over-triggering
-const TOOL_GUARDRAIL = `
+export const TOOL_GUARDRAIL = `
 ## Tool Usage Policy
 1. ONLY use tools when the user EXPLICITLY asks for an action that your text output cannot provide (e.g., "generate an image of...", "search for the latest news on...", "play music by...").
 2. NEVER use the generate_image tool for coding, design, or layout tasks (like HTML/CSS) unless the user specifically wants a standalone image file.
@@ -599,7 +596,7 @@ const TOOL_GUARDRAIL = `
 `;
 
 // Image generation tool configuration
-const imageGenerationTool = {
+export const imageGenerationTool = {
   type: "function" as const,
   function: {
     name: "generate_image",
@@ -630,7 +627,7 @@ const imageGenerationTool = {
 };
 
 // Web search tool configuration
-const webSearchTool = {
+export const webSearchTool = {
   type: "function" as const,
   function: {
     name: "web_search",
@@ -651,7 +648,7 @@ const webSearchTool = {
 };
 
 // Specialized skills library tools
-const listSkillsTool = {
+export const listSkillsTool = {
   type: "function" as const,
   function: {
     name: "list_skills",
@@ -665,7 +662,7 @@ const listSkillsTool = {
   }
 };
 
-const readSkillTool = {
+export const readSkillTool = {
   type: "function" as const,
   function: {
     name: "read_skill",
@@ -688,7 +685,7 @@ const readSkillTool = {
 
 // Helper function to process memory tags from AI response
 // Returns { content: string (without memory tags), memoryContent: string | null, hasSavedMemory: boolean }
-async function processMemoryTags(
+export async function processMemoryTags(
   content: string,
   userId: string | null,
   persona: string
@@ -731,6 +728,14 @@ const POLLINATIONS_API_URL = 'https://gen.pollinations.ai/v1/chat/completions';
 const SECRETSTOAI_API_KEY = (process.env.SECRETSTOAI_API_KEY || process.env.SECRETS_TO_AI_API_KEY || '').trim();
 const SECRETSTOAI_API_URL = 'https://api.freetheai.xyz/v1/chat/completions';
 
+// Eaon API configuration
+const EAON_API_KEY = (process.env.EAON_API_KEY || '').trim();
+const EAON_API_URL = 'https://api.eaon.dev/v1/chat/completions';
+
+// Nvidia API configuration
+const NVIDIA_API_KEY = (process.env.NVIDIA_API_KEY || process.env.NIM_API_KEY || '').trim();
+const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
+
 interface ImageGenerationParams {
   prompt: string;
   orientation?: 'portrait' | 'landscape';
@@ -772,7 +777,7 @@ function generateImageUrl(params: ImageGenerationParams): string {
   return url;
 }
 
-function createImageMarkdown(params: ImageGenerationParams): string {
+export function createImageMarkdown(params: ImageGenerationParams): string {
   const imageUrl = generateImageUrl(params);
   return `![Generated Image](${imageUrl})`;
 }
@@ -781,7 +786,7 @@ interface WebSearchParams {
   query: string;
 }
 
-async function fetchWebSearchResults(params: WebSearchParams): Promise<string> {
+export async function fetchWebSearchResults(params: WebSearchParams): Promise<string> {
   const { query } = params;
   const encodedQuery = encodeURIComponent(query);
 
@@ -815,7 +820,7 @@ interface AIMemory {
   created_at: string;
 }
 
-async function fetchUserMemories(userId: string, persona: string = 'default'): Promise<AIMemory[]> {
+export async function fetchUserMemories(userId: string, persona: string = 'default'): Promise<AIMemory[]> {
   try {
     const { data, error } = await supabase
       .from('ai_memories')
@@ -838,7 +843,7 @@ async function fetchUserMemories(userId: string, persona: string = 'default'): P
   }
 }
 
-async function addUserMemory(
+export async function addUserMemory(
   userId: string,
   content: string,
   memoryType: string = 'general',
@@ -870,7 +875,7 @@ async function addUserMemory(
   }
 }
 
-function formatMemoriesForContext(memories: AIMemory[], userProfile?: { nickname?: string; about_me?: string }): string {
+export function formatMemoriesForContext(memories: AIMemory[], userProfile?: { nickname?: string; about_me?: string }): string {
   if (memories.length === 0 && !userProfile?.nickname && !userProfile?.about_me) {
     return '';
   }
@@ -968,7 +973,7 @@ async function getUserRateLimit(userId: string | null, persona: string): Promise
 }
 
 // Supabase-based rate limiting functions
-async function checkRateLimit(userId: string | null, ip: string, persona: string): Promise<boolean> {
+export async function checkRateLimit(userId: string | null, ip: string, persona: string): Promise<boolean> {
   try {
     const now = new Date();
     const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -1012,7 +1017,7 @@ async function checkRateLimit(userId: string | null, ip: string, persona: string
   }
 }
 
-async function incrementRateLimit(userId: string | null, ip: string, persona: string): Promise<void> {
+export async function incrementRateLimit(userId: string | null, ip: string, persona: string): Promise<void> {
   try {
     const now = new Date();
     const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -1072,7 +1077,7 @@ async function incrementRateLimit(userId: string | null, ip: string, persona: st
 }
 
 // Extract text content from images using Qwen Vision via Pollinations (OCR pipeline)
-async function extractImageContent(imageUrls: string[]): Promise<string> {
+export async function extractImageContent(imageUrls: string[]): Promise<string> {
   const imageContents = imageUrls.map((url: string) => ({
     type: 'image_url',
     image_url: { url }
@@ -1129,7 +1134,7 @@ Output ONLY the extracted content, nothing else.`
 }
 
 // Streaming function for Air persona - CEREBRAS API
-async function callCerebrasAirAPIStreaming(
+export async function callCerebrasAirAPIStreaming(
   messages: any[],
   tools?: any[],
   model: string = 'qwen-3-235b-a22b-instruct-2507',
@@ -1220,7 +1225,7 @@ async function callCerebrasAirAPIStreaming(
 }
 
 // Streaming function for Girlie and Pro personas - GROQ API
-async function callGroqStandardAPIStreaming(
+export async function callGroqStandardAPIStreaming(
   messages: any[],
   model: string,
   temperature: number,
@@ -1369,7 +1374,7 @@ function extractReasoningAndContent(response: string): { content: string; thinki
 }
 
 // Secrets to AI (FreeTheAI) API function (streaming)
-async function callSecretsToAIAPIStreaming(
+export async function callSecretsToAIAPIStreaming(
   messages: any[],
   model: string,
   temperature: number = 1,
@@ -1502,8 +1507,272 @@ async function callSecretsToAIAPIStreaming(
   });
 }
 
+// Nvidia API function (streaming)
+export async function callNvidiaAPIStreaming(
+  messages: any[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: any[]
+): Promise<ReadableStream> {
+  if (!NVIDIA_API_KEY) {
+    throw new Error('NVIDIA_API_KEY / NIM_API_KEY is not configured for Nvidia requests');
+  }
+
+  // Filter out empty system messages
+  const cleanedMessages = messages.filter(msg =>
+    msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
+  );
+
+  const requestBody: any = {
+    model: model,
+    messages: cleanedMessages,
+    temperature,
+    stream: true
+  };
+
+  if (maxTokens) {
+    requestBody.max_tokens = maxTokens;
+  }
+
+  if (tools && tools.length > 0) {
+    requestBody.tools = tools;
+    requestBody.tool_choice = "auto";
+  }
+
+  console.log('Nvidia API Request:', {
+    model,
+    messages: cleanedMessages,
+    url: NVIDIA_API_URL,
+    hasTools: !!(tools && tools.length > 0),
+    toolCount: tools?.length || 0
+  });
+
+  const response = await fetch(NVIDIA_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${NVIDIA_API_KEY}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Nvidia API error:', response.status, errorText);
+    throw new Error(`Nvidia API error: ${response.status} - ${errorText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('No response body from Nvidia API');
+  }
+
+  // Transform the response stream to match our format
+  return new ReadableStream({
+    async start(controller) {
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+
+            if (trimmedLine.startsWith('data: ')) {
+              try {
+                const jsonStr = trimmedLine.slice(6);
+                const data = JSON.parse(jsonStr);
+
+                if (data.choices && data.choices[0]) {
+                  const choice = data.choices[0];
+                  if (choice.delta && choice.delta.content) {
+                    controller.enqueue(new TextEncoder().encode(
+                      JSON.stringify({
+                        type: 'content',
+                        content: choice.delta.content
+                      }) + '\n'
+                    ));
+                  }
+
+                  // Handle tool calls
+                  if (choice.delta && choice.delta.tool_calls) {
+                    controller.enqueue(new TextEncoder().encode(
+                      JSON.stringify({
+                        type: 'tool_calls',
+                        tool_calls: choice.delta.tool_calls
+                      }) + '\n'
+                    ));
+                  }
+
+                  if (choice.finish_reason) {
+                    controller.enqueue(new TextEncoder().encode(
+                      JSON.stringify({ type: 'finish', reason: choice.finish_reason }) + '\n'
+                    ));
+                  }
+                }
+              } catch (error) {
+                console.error('Error parsing streaming chunk:', error);
+              }
+            }
+          }
+        }
+
+        controller.enqueue(new TextEncoder().encode(
+          JSON.stringify({ type: 'finish' }) + '\n'
+        ));
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    }
+  });
+}
+
+// Eaon API function (streaming)
+export async function callEaonAPIStreaming(
+  messages: any[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: any[]
+): Promise<ReadableStream> {
+  if (!EAON_API_KEY) {
+    throw new Error('EAON_API_KEY is not configured for Eaon requests');
+  }
+
+  // Filter out empty system messages
+  const cleanedMessages = messages.filter(msg =>
+    msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
+  );
+
+  const requestBody: any = {
+    model: model,
+    messages: cleanedMessages,
+    temperature,
+    stream: true,
+    // --- Bulletproof Thinking/Reasoning Deactivation ---
+    thinking_budget: 0,          // Maps to Gemini / Open-source routers
+    reasoning_effort: "none",    // Maps to OpenAI-style routers
+    thinking: null               // Maps to Anthropic-style routers
+  };
+
+  if (maxTokens) {
+    requestBody.max_tokens = maxTokens;
+  }
+
+  if (tools && tools.length > 0) {
+    requestBody.tools = tools;
+    requestBody.tool_choice = "auto";
+  }
+
+  console.log('Eaon API Request:', {
+    model,
+    messages: cleanedMessages,
+    url: EAON_API_URL,
+    hasTools: !!(tools && tools.length > 0),
+    toolCount: tools?.length || 0
+  });
+
+  const response = await fetch(EAON_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${EAON_API_KEY}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Eaon API error:', response.status, errorText);
+    throw new Error(`Eaon API error: ${response.status} - ${errorText}`);
+  }
+
+  if (!response.body) {
+    throw new Error('No response body from Eaon API');
+  }
+
+  // Transform the response stream to match our format
+  return new ReadableStream({
+    async start(controller) {
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine || trimmedLine === 'data: [DONE]') continue;
+
+            if (trimmedLine.startsWith('data: ')) {
+              try {
+                const jsonStr = trimmedLine.slice(6);
+                const data = JSON.parse(jsonStr);
+
+                if (data.choices && data.choices[0]) {
+                  const choice = data.choices[0];
+                  if (choice.delta && choice.delta.content) {
+                    controller.enqueue(new TextEncoder().encode(
+                      JSON.stringify({
+                        type: 'content',
+                        content: choice.delta.content
+                      }) + '\n'
+                    ));
+                  }
+
+                  // Handle tool calls
+                  if (choice.delta && choice.delta.tool_calls) {
+                    controller.enqueue(new TextEncoder().encode(
+                      JSON.stringify({
+                        type: 'tool_calls',
+                        tool_calls: choice.delta.tool_calls
+                      }) + '\n'
+                    ));
+                  }
+
+                  if (choice.finish_reason) {
+                    controller.enqueue(new TextEncoder().encode(
+                      JSON.stringify({ type: 'finish', reason: choice.finish_reason }) + '\n'
+                    ));
+                  }
+                }
+              } catch (error) {
+                console.error('Error parsing streaming chunk:', error);
+              }
+            }
+          }
+        }
+
+        controller.enqueue(new TextEncoder().encode(
+          JSON.stringify({ type: 'finish' }) + '\n'
+        ));
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    }
+  });
+}
+
 // Pollinations API function for external AI models (streaming)
-async function callPollinationsAPIStreaming(
+export async function callPollinationsAPIStreaming(
   messages: any[],
   model: string,
   temperature: number = 1,
@@ -1692,6 +1961,128 @@ async function callSecretsToAIAPI(
     const errorText = await response.text().catch(() => 'No error details');
     console.error('Secrets to AI API error:', response.status, errorText);
     throw new Error(`Secrets to AI API error: ${response.status} - ${errorText}`);
+  }
+
+  return await response.json();
+}
+
+// Nvidia API function (non-streaming)
+async function callNvidiaAPI(
+  messages: any[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: any[]
+): Promise<any> {
+  if (!NVIDIA_API_KEY) {
+    throw new Error('NVIDIA_API_KEY / NIM_API_KEY is not configured for Nvidia requests');
+  }
+
+  // Filter out empty system messages
+  const cleanedMessages = messages.filter(msg =>
+    msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
+  );
+
+  const requestBody: any = {
+    model: model,
+    messages: cleanedMessages,
+    temperature,
+    stream: false
+  };
+
+  if (maxTokens) {
+    requestBody.max_tokens = maxTokens;
+  }
+
+  if (tools && tools.length > 0) {
+    requestBody.tools = tools;
+    requestBody.tool_choice = "auto";
+  }
+
+  console.log('Nvidia API Request (non-streaming):', {
+    model,
+    messages: cleanedMessages,
+    url: NVIDIA_API_URL,
+    hasTools: !!(tools && tools.length > 0),
+    toolCount: tools?.length || 0
+  });
+
+  const response = await fetch(NVIDIA_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${NVIDIA_API_KEY}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Nvidia API error:', response.status, errorText);
+    throw new Error(`Nvidia API error: ${response.status} - ${errorText}`);
+  }
+
+  return await response.json();
+}
+
+// Eaon API function (non-streaming)
+async function callEaonAPI(
+  messages: any[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: any[]
+): Promise<any> {
+  if (!EAON_API_KEY) {
+    throw new Error('EAON_API_KEY is not configured for Eaon requests');
+  }
+
+  // Filter out empty system messages
+  const cleanedMessages = messages.filter(msg =>
+    msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
+  );
+
+  const requestBody: any = {
+    model: model,
+    messages: cleanedMessages,
+    temperature,
+    stream: false,
+    // --- Bulletproof Thinking/Reasoning Deactivation ---
+    thinking_budget: 0,          // Maps to Gemini / Open-source routers
+    reasoning_effort: "none",    // Maps to OpenAI-style routers
+    thinking: null               // Maps to Anthropic-style routers
+  };
+
+  if (maxTokens) {
+    requestBody.max_tokens = maxTokens;
+  }
+
+  if (tools && tools.length > 0) {
+    requestBody.tools = tools;
+    requestBody.tool_choice = "auto";
+  }
+
+  console.log('Eaon API Request (non-streaming):', {
+    model,
+    messages: cleanedMessages,
+    url: EAON_API_URL,
+    hasTools: !!(tools && tools.length > 0),
+    toolCount: tools?.length || 0
+  });
+
+  const response = await fetch(EAON_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${EAON_API_KEY}`
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Eaon API error:', response.status, errorText);
+    throw new Error(`Eaon API error: ${response.status} - ${errorText}`);
   }
 
   return await response.json();
@@ -1886,7 +2277,9 @@ ${TOOL_GUARDRAIL}
 
     const processedMessages = [...messages];
 
-    let apiMessages;
+    // Messages can carry tool-call fields (tool_calls / tool_call_id) once the
+    // PRO agentic loop appends them, so keep the element shape open.
+    let apiMessages: any[];
     // Track if we need to run the image OCR pipeline before the main AI call
     const hasImageInput = !!imageData;
     const imageUrlsForOCR = hasImageInput ? (Array.isArray(imageData) ? imageData : [imageData]) : [];
@@ -2024,6 +2417,22 @@ ${TOOL_GUARDRAIL}
               flowConfig.maxTokens,
               toolsToUse
             );
+          } else if (fsProvider === 'eaon') {
+            streamingResponse = await callEaonAPIStreaming(
+              apiMessages,
+              flowConfig.model,
+              flowConfig.temperature,
+              flowConfig.maxTokens,
+              toolsToUse
+            );
+          } else if (fsProvider === 'nvidia' || fsProvider === 'nim') {
+            streamingResponse = await callNvidiaAPIStreaming(
+              apiMessages,
+              flowConfig.model,
+              flowConfig.temperature,
+              flowConfig.maxTokens,
+              toolsToUse
+            );
           } else {
             streamingResponse = await callCerebrasAirAPIStreaming(
               apiMessages,
@@ -2061,6 +2470,22 @@ ${TOOL_GUARDRAIL}
               maxTokensToUse,
               toolsToUse
             );
+          } else if (airProvider === 'eaon') {
+            streamingResponse = await callEaonAPIStreaming(
+              apiMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              toolsToUse
+            );
+          } else if (airProvider === 'nvidia' || airProvider === 'nim') {
+            streamingResponse = await callNvidiaAPIStreaming(
+              apiMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              toolsToUse
+            );
           } else {
             streamingResponse = await callCerebrasAirAPIStreaming(
               apiMessages,
@@ -2091,6 +2516,22 @@ ${TOOL_GUARDRAIL}
           let streamingResponse;
           if (proProvider === 'secretstoai' || proProvider === 'secrectstoai') {
             streamingResponse = await callSecretsToAIAPIStreaming(
+              currentMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              activeTools
+            );
+          } else if (proProvider === 'eaon') {
+            streamingResponse = await callEaonAPIStreaming(
+              currentMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              activeTools
+            );
+          } else if (proProvider === 'nvidia' || proProvider === 'nim') {
+            streamingResponse = await callNvidiaAPIStreaming(
               currentMessages,
               modelToUse,
               temperatureToUse,
@@ -2296,6 +2737,22 @@ ${TOOL_GUARDRAIL}
         const provider = (personaConfig as any).provider || 'groq';
         if (provider === 'secretstoai' || provider === 'secrectstoai') {
           streamingResponse = await callSecretsToAIAPIStreaming(
+            apiMessages,
+            modelToUse,
+            temperatureToUse,
+            maxTokensToUse,
+            toolsToUse
+          );
+        } else if (provider === 'eaon') {
+          streamingResponse = await callEaonAPIStreaming(
+            apiMessages,
+            modelToUse,
+            temperatureToUse,
+            maxTokensToUse,
+            toolsToUse
+          );
+        } else if (provider === 'nvidia' || provider === 'nim') {
+          streamingResponse = await callNvidiaAPIStreaming(
             apiMessages,
             modelToUse,
             temperatureToUse,
@@ -2558,6 +3015,22 @@ ${TOOL_GUARDRAIL}
               flowConfig.maxTokens,
               toolsToUse
             );
+          } else if (fsProvider === 'eaon') {
+            apiResponse = await callEaonAPI(
+              apiMessages,
+              flowConfig.model,
+              flowConfig.temperature,
+              flowConfig.maxTokens,
+              toolsToUse
+            );
+          } else if (fsProvider === 'nvidia' || fsProvider === 'nim') {
+            apiResponse = await callNvidiaAPI(
+              apiMessages,
+              flowConfig.model,
+              flowConfig.temperature,
+              flowConfig.maxTokens,
+              toolsToUse
+            );
           } else {
             const requestBody: any = {
               model: flowConfig.model,
@@ -2628,6 +3101,22 @@ ${TOOL_GUARDRAIL}
               maxTokensToUse,
               toolsToUse
             );
+          } else if (airProvider === 'eaon') {
+            apiResponse = await callEaonAPI(
+              apiMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              toolsToUse
+            );
+          } else if (airProvider === 'nvidia' || airProvider === 'nim') {
+            apiResponse = await callNvidiaAPI(
+              apiMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              toolsToUse
+            );
           } else {
             const requestBody: any = {
               model: modelToUse,
@@ -2687,6 +3176,22 @@ ${TOOL_GUARDRAIL}
           let apiResponse;
           if (proProvider === 'secretstoai' || proProvider === 'secrectstoai') {
             apiResponse = await callSecretsToAIAPI(
+              currentMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              activeTools
+            );
+          } else if (proProvider === 'eaon') {
+            apiResponse = await callEaonAPI(
+              currentMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              activeTools
+            );
+          } else if (proProvider === 'nvidia' || proProvider === 'nim') {
+            apiResponse = await callNvidiaAPI(
               currentMessages,
               modelToUse,
               temperatureToUse,
@@ -2858,6 +3363,22 @@ ${TOOL_GUARDRAIL}
         const provider = (personaConfig as any).provider || 'groq';
         if (provider === 'secretstoai' || provider === 'secrectstoai') {
           apiResponse = await callSecretsToAIAPI(
+            apiMessages,
+            modelToUse,
+            temperatureToUse,
+            maxTokensToUse,
+            toolsToUse
+          );
+        } else if (provider === 'eaon') {
+          apiResponse = await callEaonAPI(
+            apiMessages,
+            modelToUse,
+            temperatureToUse,
+            maxTokensToUse,
+            toolsToUse
+          );
+        } else if (provider === 'nvidia' || provider === 'nim') {
+          apiResponse = await callNvidiaAPI(
             apiMessages,
             modelToUse,
             temperatureToUse,
