@@ -15,12 +15,12 @@ export const AI_PERSONAS = {
     provider: 'groq', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon'
     model: 'qwen/qwen3.6-27b',
     temperature: 0.8,
-    maxTokens: 17700,
+    maxTokens: 16304,
     flowState: {
       provider: 'groq',
       model: 'openai/gpt-oss-20b',
       temperature: 0.8,
-      maxTokens: 27700,
+      maxTokens: 16304,
       quotaCost: 2
     },
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
