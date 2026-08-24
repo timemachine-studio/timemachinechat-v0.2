@@ -13,7 +13,7 @@ export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'pollinations', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon'
-    model: 'JustScriptzz/mercury-2',
+    model: 'nemotron-3.5-lightning',
     temperature: 0.8,
     maxTokens: 16304,
     flowState: {
