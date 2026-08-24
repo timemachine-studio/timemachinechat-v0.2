@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import {
   TOOL_GUARDRAIL,
+  THINKING_DIRECTIVE,
   toApiMessages,
   selectTools,
   resolveImageAllowed,
@@ -2124,11 +2125,14 @@ Example: If user says "My favorite song is Attention by Charlie Puth", you would
 The memory tags will be processed and removed from the visible response, so write your actual response normally before the tags.` : '';
 
     // Enhanced system prompt with tool usage instructions, guardrails and memory context
+    // music-compose must emit only JSON, so it gets neither memory tags nor
+    // the thinking directive.
+    const thinkingDirective = specialMode === 'music-compose' ? '' : THINKING_DIRECTIVE;
+
     const enhancedSystemPrompt = `${systemPrompt}${memoryContext}${memoryInstructions}
 
 ${TOOL_GUARDRAIL}
-
-.`;
+${thinkingDirective}`;
 
     // Initialize model, system prompt, and tools — apply special mode overrides
     let modelToUse = specialModeConfig?.model || personaConfig.model;

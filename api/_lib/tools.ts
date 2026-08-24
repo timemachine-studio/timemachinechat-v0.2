@@ -19,9 +19,19 @@ const POLLINATIONS_API_KEY = (process.env.POLLINATIONS_API_KEY || '').trim();
 // Which tools exist is now decided in selectTools() instead of asked for here.
 export const TOOL_GUARDRAIL = `
 ## Tool Usage Policy
-1. Answer from your own knowledge and reasoning whenever you can. Reach for a tool only when the user needs something your own output cannot provide.
+1. Prefer your own knowledge and reasoning over tools. Reach for a tool only when the user needs something you cannot produce yourself.
 2. When the user asks for a website, app, game, or any other code, write the code directly in a fenced code block.
 3. The tools listed in this request are the only ones available to you. If a tool is not listed, it does not exist for this turn.
+`;
+
+// The <reason> mechanism is the thinking feature, so it goes last in the
+// assembled system prompt. Each persona already describes it mid-prompt, but
+// memory instructions and the tool policy come after that — and the model
+// follows whatever it read most recently. Restating it in the final position
+// makes the behaviour independent of how long a persona's prompt grows.
+export const THINKING_DIRECTIVE = `
+## Thinking
+When a question needs actual working out — math, counting, logic puzzles, riddles, multi-step problems, tricky code — reason it through inside <reason></reason> tags before you answer, then give the answer after the closing tag. What is inside the tags is for you, not for the user. For simple questions skip it entirely and answer straight away; you are meant to be fast.
 `;
 
 export const imageGenerationTool = {

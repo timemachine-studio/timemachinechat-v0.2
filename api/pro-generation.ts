@@ -8,7 +8,7 @@ import {
   fetchUserMemories,
   formatMemoriesForContext,
 } from './ai-proxy.js';
-import { TOOL_GUARDRAIL, selectTools, resolveImageAllowed, resolveWebSearchAllowed, toApiMessages } from './_lib/tools.js';
+import { TOOL_GUARDRAIL, THINKING_DIRECTIVE, selectTools, resolveImageAllowed, resolveWebSearchAllowed, toApiMessages } from './_lib/tools.js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import { getAuthenticatedRequestUser } from './_lib/auth.js';
 import {
@@ -94,11 +94,12 @@ Example: If user says "My favorite song is Attention by Charlie Puth", you would
 
 The memory tags will be processed and removed from the visible response, so write your actual response normally before the tags.` : '';
 
+  const thinkingDirective = specialMode === 'music-compose' ? '' : THINKING_DIRECTIVE;
+
   const enhancedSystemPrompt = `${systemPrompt}${memoryContext}${memoryInstructions}
 
 ${TOOL_GUARDRAIL}
-
-.`;
+${thinkingDirective}`;
 
   const modelToUse = specialModeConfig?.model || personaConfig.model;
   let systemPromptToUse = enhancedSystemPrompt;
