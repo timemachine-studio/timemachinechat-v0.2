@@ -370,7 +370,7 @@ You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule wi
     },
     initialMessage: "It's TimeMachine PRO, from future.",
     provider: 'nvidia',
-    model: 'z-ai/glm-5.2',
+    model: 'deepseek-ai/deepseek-v4-flash-0731',
     temperature: 0.8,
     maxTokens: 67200
   },
