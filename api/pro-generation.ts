@@ -2,17 +2,13 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { tasks } from '@trigger.dev/sdk';
 import {
   AI_PERSONAS,
-  TOOL_GUARDRAIL,
-  imageGenerationTool,
-  webSearchTool,
-  listSkillsTool,
-  readSkillTool,
   checkRateLimit,
   extractImageContent,
   fetchHealthcareRAGContext,
   fetchUserMemories,
   formatMemoriesForContext,
 } from './ai-proxy.js';
+import { TOOL_GUARDRAIL, selectTools, resolveImageAllowed, toApiMessages } from './_lib/tools.js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import { getAuthenticatedRequestUser } from './_lib/auth.js';
 import {
@@ -69,13 +65,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   }
 
   // ─── Prompt building — mirrors the pro branch of /api/ai-proxy ──────────
-  const toolMap: Record<string, any> = {
-    imageGeneration: imageGenerationTool,
-    webSearch: webSearchTool,
-    listSkills: listSkillsTool,
-    readSkill: readSkillTool,
-  };
-
   const specialModeConfig = specialMode && (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode]
     ? (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode]['pro']
     : null;
@@ -113,12 +102,14 @@ ${TOOL_GUARDRAIL}
 
   const modelToUse = specialModeConfig?.model || personaConfig.model;
   let systemPromptToUse = enhancedSystemPrompt;
-  const toolsToUse: any[] = specialModeConfig && 'tools' in specialModeConfig
-    ? specialModeConfig.tools.map((t: string) => toolMap[t]).filter(Boolean)
-    : [imageGenerationTool, webSearchTool];
-
   // PRO always gets the skills library tools
-  toolsToUse.push(listSkillsTool, readSkillTool);
+  // Decided in code, not asked of the model: see api/_lib/tools.ts.
+  const imageAllowed = resolveImageAllowed(messages, !!imageData);
+  const toolsToUse: any[] = selectTools({
+    specialModeConfig,
+    includeSkills: true,
+    imageAllowed,
+  });
 
   const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
   const maxTokensToUse = specialModeConfig?.maxTokens ?? personaConfig.maxTokens;
@@ -140,10 +131,7 @@ ${TOOL_GUARDRAIL}
   // Build apiMessages (pro always uses a system prompt)
   let apiMessages: any[] = [
     { role: 'system', content: systemPromptToUse },
-    ...messages.map((msg: any) => ({
-      role: msg.isAI ? 'assistant' : 'user',
-      content: msg.content,
-    })),
+    ...toApiMessages(messages),
   ];
 
   // PDF/document text injection
@@ -218,6 +206,7 @@ ${TOOL_GUARDRAIL}
     inputImageUrls,
     imageDimensions,
     hadImageInput: hasImageInput && imageUrlsForOCR.length > 0,
+    imageAllowed,
   };
 
   try {

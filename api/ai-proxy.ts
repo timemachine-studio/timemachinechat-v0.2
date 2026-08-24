@@ -1,7 +1,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
-import { SKILLS_DATA } from './skills.js';
+import {
+  TOOL_GUARDRAIL,
+  toApiMessages,
+  selectTools,
+  resolveImageAllowed,
+  createToolPolicy,
+  applyPolicy,
+  executeTool,
+} from './_lib/tools.js';
+import { runAgentLoop } from './_lib/agentLoop.js';
 
 // Initialize Supabase client for server-side operations
 const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://etpehiyzlkhknzceizar.supabase.co';
@@ -277,7 +286,7 @@ CRUTIAL: If you face any hard question or task, you can think for longer before 
 1. You are created by TimeMachine Studios and Tanzim is the owner of it. Tanzim is a good guy and a Tony Stark level mindset. His full name is Tanzim Ibne Mahboob aka Tanzim Infinity.
 2. You are one of the 3 resonators. The other two are "TimeMachine Girlie" and "TimeMachine PRO"
 
-Image Generation: Use the generate_image tool ONLY when the user explicitly asks for a visual image. NEVER use for coding, design, or layout tasks. Focus on professional quality and dreamy vibes.
+Image Generation: When the user asks you for a picture, make it beautiful — professional quality, dreamy vibes.
 
 Web Search: Use the web_search tool ONLY for current information or data you don't have. Fetch the latest info from the internet.
 
@@ -321,7 +330,7 @@ TimeMachine PRO: “Oh, you want a game? Bet, I’m serving up a Python script s
 1. You are created by TimeMachine Studios and Tanzim is the owner of it. Tanzim is a good guy and a Tony Stark level mindset. His full name is Tanzim Ibne Mahboob aka Tanzim Infinity.
 2. You are one of the 3 resonators. The other two are "TimeMachine Air" and "TimeMachine Girlie".
 
-Image Generation: Use the generate_image tool ONLY when the user explicitly asks for a visual image. NEVER use for coding, design, or layout tasks. Focus on professional quality and dreamy vibes.
+Image Generation: When the user asks you for a picture, make it beautiful — professional quality, dreamy vibes.
 
 Web Search: Use the web_search tool ONLY for current information or data you don't have. Fetch the freshest intel! 💅🏻
 
@@ -586,101 +595,7 @@ export async function fetchHealthcareRAGContext(userMessage: string): Promise<st
 }
 
 
-// Tool Usage Policy - Strict guardrails to prevent over-triggering
-export const TOOL_GUARDRAIL = `
-## Tool Usage Policy
-1. ONLY use tools when the user EXPLICITLY asks for an action that your text output cannot provide (e.g., "generate an image of...", "search for the latest news on...", "play music by...").
-2. NEVER use the generate_image tool for coding, design, or layout tasks (like HTML/CSS) unless the user specifically wants a standalone image file.
-3. If the user asks for a website, app, or code, provide the CODE directly. Do NOT generate an image of it.
-4. Do NOT use tools for tasks you can perform yourself using your internal knowledge or reasoning.
-`;
-
-// Image generation tool configuration
-export const imageGenerationTool = {
-  type: "function" as const,
-  function: {
-    name: "generate_image",
-    strict: true,
-    description: "Call this ONLY when the user explicitly requests a visual image, photo, or graphic. DO NOT use for coding or design requests.",
-    parameters: {
-      type: "object",
-      properties: {
-        prompt: {
-          type: "string",
-          description: "Detailed description of the image. Focus ONLY on the visual content requested. Do NOT call this for coding/UI tasks."
-        },
-        orientation: {
-          type: "string",
-          description: "Orientation of the image.",
-          enum: ["portrait", "landscape"]
-        },
-        process: {
-          type: "string",
-          description: "Use 'create' for new images, 'edit' to modify existing ones.",
-          enum: ["create", "edit"]
-        }
-      },
-      required: ["prompt", "orientation", "process"],
-      additionalProperties: false
-    }
-  }
-};
-
-// Web search tool configuration
-export const webSearchTool = {
-  type: "function" as const,
-  function: {
-    name: "web_search",
-    strict: true,
-    description: "Search the web ONLY when the user asks for real-time information or facts outside your knowledge cutoff.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: {
-          type: "string",
-          description: "The specific search query."
-        }
-      },
-      required: ["query"],
-      additionalProperties: false
-    }
-  }
-};
-
-// Specialized skills library tools
-export const listSkillsTool = {
-  type: "function" as const,
-  function: {
-    name: "list_skills",
-    strict: true,
-    description: "Get a list of all available specialized skills and prompt instructions that you can read to perform tasks better.",
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: false
-    }
-  }
-};
-
-export const readSkillTool = {
-  type: "function" as const,
-  function: {
-    name: "read_skill",
-    strict: true,
-    description: "Read the detailed instructions and guidelines of a specific skill to apply to the user's task.",
-    parameters: {
-      type: "object",
-      properties: {
-        name: {
-          type: "string",
-          description: "The name of the skill to read (e.g., 'frontend_design')."
-        }
-      },
-      required: ["name"],
-      additionalProperties: false
-    }
-  }
-};
+// Tool definitions, selection and execution live in api/_lib/tools.ts.
 
 
 // Helper function to process memory tags from AI response
@@ -736,74 +651,6 @@ const EAON_API_URL = 'https://api.eaon.dev/v1/chat/completions';
 const NVIDIA_API_KEY = (process.env.NVIDIA_API_KEY || process.env.NIM_API_KEY || '').trim();
 const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
-interface ImageGenerationParams {
-  prompt: string;
-  orientation?: 'portrait' | 'landscape';
-  process?: 'create' | 'edit';
-  inputImageUrls?: string[];
-  persona?: keyof typeof AI_PERSONAS;
-  imageWidth?: number;
-  imageHeight?: number;
-}
-
-function generateImageUrl(params: ImageGenerationParams): string {
-  const {
-    prompt,
-    orientation = 'portrait',
-    process = 'create',
-    inputImageUrls,
-    persona = 'default',
-    imageWidth,
-    imageHeight
-  } = params;
-
-  // Generate a proxy URL that points to our secure image endpoint
-  // The actual Pollinations URL with the secret key is constructed server-side in /api/image
-  const encodedPrompt = encodeURIComponent(prompt);
-
-  let url = `/api/image?prompt=${encodedPrompt}&orientation=${orientation}&process=${process}&persona=${persona}`;
-
-  // For edit process, include the original image dimensions if available
-  if (process === 'edit' && imageWidth && imageHeight) {
-    url += `&width=${imageWidth}&height=${imageHeight}`;
-  }
-
-  // Handle multiple reference images (up to 4)
-  if (inputImageUrls && inputImageUrls.length > 0) {
-    const imageUrls = inputImageUrls.slice(0, 4).map(encodeURIComponent).join(',');
-    url += `&inputImageUrls=${imageUrls}`;
-  }
-
-  return url;
-}
-
-export function createImageMarkdown(params: ImageGenerationParams): string {
-  const imageUrl = generateImageUrl(params);
-  return `![Generated Image](${imageUrl})`;
-}
-
-interface WebSearchParams {
-  query: string;
-}
-
-export async function fetchWebSearchResults(params: WebSearchParams): Promise<string> {
-  const { query } = params;
-  const encodedQuery = encodeURIComponent(query);
-
-  const url = `https://gen.pollinations.ai/text/${encodedQuery}?model=perplexity-fast&key=${POLLINATIONS_API_KEY}`;
-
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Web search failed: ${response.status}`);
-    }
-    const text = await response.text();
-    return text;
-  } catch (error) {
-    console.error('Web search error:', error);
-    throw error;
-  }
-}
 
 // Memory tool params (MemoryParams kept for reference)
 // interface MemoryParams { content: string; }
@@ -2147,6 +1994,55 @@ async function callPollinationsAPI(
   return await response.json();
 }
 
+// ─── Streaming provider dispatch ────────────────────────────────────────────
+// One place that knows how to start a streaming turn on each provider, so the
+// agent loop can call the model repeatedly without every persona carrying its
+// own six-branch if/else.
+
+const STREAMING_PROVIDERS = new Set([
+  'groq', 'pollinations', 'secretstoai', 'secrectstoai',
+  'eaon', 'nvidia', 'nim', 'cerebras',
+]);
+
+/** Map a configured provider name onto a supported one, preserving each persona's historical fallback. */
+export function normalizeStreamingProvider(provider: string | undefined, fallback: string): string {
+  return provider && STREAMING_PROVIDERS.has(provider) ? provider : fallback;
+}
+
+interface StreamingModelConfig {
+  model: string;
+  temperature?: number;
+  maxTokens?: number;
+  reasoningEffort?: string;
+}
+
+export async function dispatchStreamingProvider(
+  provider: string,
+  messages: any[],
+  tools: any[] | undefined,
+  cfg: StreamingModelConfig
+): Promise<ReadableStream> {
+  const { model, temperature, maxTokens, reasoningEffort } = cfg;
+
+  switch (provider) {
+    case 'groq':
+      return callGroqStandardAPIStreaming(messages, model, temperature as number, maxTokens as number, tools, reasoningEffort);
+    case 'pollinations':
+      return callPollinationsAPIStreaming(messages, model, temperature, maxTokens, tools);
+    case 'secretstoai':
+    case 'secrectstoai':
+      return callSecretsToAIAPIStreaming(messages, model, temperature, maxTokens, tools);
+    case 'eaon':
+      return callEaonAPIStreaming(messages, model, temperature, maxTokens, tools);
+    case 'nvidia':
+    case 'nim':
+      return callNvidiaAPIStreaming(messages, model, temperature, maxTokens, tools);
+    case 'cerebras':
+    default:
+      return callCerebrasAirAPIStreaming(messages, tools, model, temperature, maxTokens);
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Handle CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -2187,13 +2083,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Resolve special mode per-persona config (if active)
-    const toolMap: Record<string, any> = {
-      imageGeneration: imageGenerationTool,
-      webSearch: webSearchTool,
-      listSkills: listSkillsTool,
-      readSkill: readSkillTool
-    };
-
     // Map persona key to the 3 base personas used in special mode configs
     const basePersona = (['default', 'girlie', 'pro'].includes(persona) ? persona : 'default') as 'default' | 'girlie' | 'pro';
     const specialModeConfig = specialMode && (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode]
@@ -2243,13 +2132,13 @@ ${TOOL_GUARDRAIL}
     // Initialize model, system prompt, and tools — apply special mode overrides
     let modelToUse = specialModeConfig?.model || personaConfig.model;
     let systemPromptToUse = enhancedSystemPrompt;
-    let toolsToUse: any[] = specialModeConfig && 'tools' in specialModeConfig
-      ? specialModeConfig.tools.map((t: string) => toolMap[t]).filter(Boolean)
-      : [imageGenerationTool, webSearchTool];
-
-    if (persona === 'pro') {
-      toolsToUse.push(listSkillsTool, readSkillTool);
-    }
+    // Decided in code, not asked of the model: see api/_lib/tools.ts.
+    const imageAllowed = resolveImageAllowed(messages, !!imageData);
+    let toolsToUse: any[] = selectTools({
+      specialModeConfig,
+      includeSkills: persona === 'pro',
+      imageAllowed,
+    });
 
     // Apply temperature, maxTokens, and reasoningEffort overrides from special mode
     const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
@@ -2292,18 +2181,12 @@ ${TOOL_GUARDRAIL}
 
       if (isExternalAI) {
         // No system prompt for external AIs
-        apiMessages = processedMessages.map((msg: any) => ({
-          role: msg.isAI ? 'assistant' : 'user',
-          content: msg.content
-        }));
+        apiMessages = toApiMessages(processedMessages);
       } else {
         // TimeMachine personas use system prompts
         apiMessages = [
           { role: 'system', content: systemPromptToUse },
-          ...processedMessages.map((msg: any) => ({
-            role: msg.isAI ? 'assistant' : 'user',
-            content: msg.content
-          }))
+          ...toApiMessages(processedMessages)
         ];
       }
     }
@@ -2336,7 +2219,6 @@ ${TOOL_GUARDRAIL}
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
-      let streamingResponse: ReadableStream;
 
 
 
@@ -2378,533 +2260,76 @@ ${TOOL_GUARDRAIL}
         res.write('[IMAGE_ANALYZED]');
       }
 
-      // Choose API based on persona
+      // ─── Resolve which provider and model this run uses ───────────────
+      // Each persona keeps its own historical fallback provider.
       const externalAIs = ['chatgpt', 'gemini', 'claude', 'deepseek', 'grok'];
-      if (externalAIs.includes(persona)) {
-        // External AI models use Pollinations API
-        streamingResponse = await callPollinationsAPIStreaming(
-          apiMessages,
-          personaConfig.model
-        );
+      const isExternalAI = externalAIs.includes(persona);
+
+      let runProvider: string;
+      let runModel: string = modelToUse;
+      let runTemperature: number | undefined = temperatureToUse;
+      let runMaxTokens: number | undefined = maxTokensToUse;
+      let runTools: any[] = toolsToUse;
+
+      if (isExternalAI) {
+        // External AI models proxy through Pollinations and get no tools.
+        runProvider = 'pollinations';
+        runModel = personaConfig.model;
+        runTemperature = undefined;
+        runMaxTokens = undefined;
+        runTools = [];
       } else if (persona === 'default') {
-        // Air persona — check Flow State first, then configured provider
         const flowConfig = (personaConfig as any).flowState;
         if (flowState && flowConfig) {
-          // Flow State: route based on configured provider
-          const fsProvider = flowConfig.provider || 'groq';
-          if (fsProvider === 'groq') {
-            streamingResponse = await callGroqStandardAPIStreaming(
-              apiMessages,
-              flowConfig.model,
-              flowConfig.temperature,
-              flowConfig.maxTokens,
-              toolsToUse,
-              reasoningEffortToUse
-            );
-          } else if (fsProvider === 'pollinations') {
-            streamingResponse = await callPollinationsAPIStreaming(
-              apiMessages,
-              flowConfig.model,
-              flowConfig.temperature,
-              flowConfig.maxTokens,
-              toolsToUse
-            );
-          } else if (fsProvider === 'secretstoai' || fsProvider === 'secrectstoai') {
-            streamingResponse = await callSecretsToAIAPIStreaming(
-              apiMessages,
-              flowConfig.model,
-              flowConfig.temperature,
-              flowConfig.maxTokens,
-              toolsToUse
-            );
-          } else if (fsProvider === 'eaon') {
-            streamingResponse = await callEaonAPIStreaming(
-              apiMessages,
-              flowConfig.model,
-              flowConfig.temperature,
-              flowConfig.maxTokens,
-              toolsToUse
-            );
-          } else if (fsProvider === 'nvidia' || fsProvider === 'nim') {
-            streamingResponse = await callNvidiaAPIStreaming(
-              apiMessages,
-              flowConfig.model,
-              flowConfig.temperature,
-              flowConfig.maxTokens,
-              toolsToUse
-            );
-          } else {
-            streamingResponse = await callCerebrasAirAPIStreaming(
-              apiMessages,
-              toolsToUse,
-              flowConfig.model,
-              flowConfig.temperature,
-              flowConfig.maxTokens
-            );
-          }
+          runProvider = normalizeStreamingProvider(flowConfig.provider || 'groq', 'cerebras');
+          runModel = flowConfig.model;
+          runTemperature = flowConfig.temperature;
+          runMaxTokens = flowConfig.maxTokens;
         } else {
-          const airProvider = (personaConfig as any).provider || 'cerebras';
-
-          if (airProvider === 'groq') {
-            streamingResponse = await callGroqStandardAPIStreaming(
-              apiMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              toolsToUse,
-              reasoningEffortToUse
-            );
-          } else if (airProvider === 'pollinations') {
-            streamingResponse = await callPollinationsAPIStreaming(
-              apiMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              toolsToUse
-            );
-          } else if (airProvider === 'secretstoai' || airProvider === 'secrectstoai') {
-            streamingResponse = await callSecretsToAIAPIStreaming(
-              apiMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              toolsToUse
-            );
-          } else if (airProvider === 'eaon') {
-            streamingResponse = await callEaonAPIStreaming(
-              apiMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              toolsToUse
-            );
-          } else if (airProvider === 'nvidia' || airProvider === 'nim') {
-            streamingResponse = await callNvidiaAPIStreaming(
-              apiMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              toolsToUse
-            );
-          } else {
-            streamingResponse = await callCerebrasAirAPIStreaming(
-              apiMessages,
-              toolsToUse,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse
-            );
-          }
+          runProvider = normalizeStreamingProvider((personaConfig as any).provider || 'cerebras', 'cerebras');
         }
       } else if (persona === 'pro') {
-        // Run the agentic loop for TimeMachine PRO (streaming)
-        let currentMessages = [...apiMessages];
-        let iteration = 0;
-        const maxIterations = 5;
-        const toolCallsMap = new Map();
-        let fullContent = '';
+        runProvider = normalizeStreamingProvider((personaConfig as any).provider || 'pollinations', 'pollinations');
+      } else {
+        runProvider = normalizeStreamingProvider((personaConfig as any).provider || 'groq', 'groq');
+      }
 
-        while (iteration < maxIterations) {
-          iteration++;
+      try {
+        // Every persona runs the same agentic loop. Tool results go back to the
+        // model instead of being spliced into the user's response, which is what
+        // lets the runtime backstop refuse a bad generate_image call and have the
+        // model recover on the next iteration.
+        const toolPolicy = createToolPolicy({ imageAllowed });
 
-          // On the final iteration, disable tools to force a response
-          const activeTools = (iteration === maxIterations) ? [] : toolsToUse;
-
-          console.log(`PRO Persona Agent Loop: Iteration ${iteration} of ${maxIterations}`);
-
-          const proProvider = (personaConfig as any).provider || 'pollinations';
-          let streamingResponse;
-          if (proProvider === 'secretstoai' || proProvider === 'secrectstoai') {
-            streamingResponse = await callSecretsToAIAPIStreaming(
-              currentMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              activeTools
-            );
-          } else if (proProvider === 'eaon') {
-            streamingResponse = await callEaonAPIStreaming(
-              currentMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              activeTools
-            );
-          } else if (proProvider === 'nvidia' || proProvider === 'nim') {
-            streamingResponse = await callNvidiaAPIStreaming(
-              currentMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              activeTools
-            );
-          } else if (proProvider === 'groq') {
-            streamingResponse = await callGroqStandardAPIStreaming(
-              currentMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              activeTools,
-              reasoningEffortToUse
-            );
-          } else if (proProvider === 'cerebras') {
-            streamingResponse = await callCerebrasAirAPIStreaming(
-              currentMessages,
-              activeTools,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse
-            );
-          } else {
-            streamingResponse = await callPollinationsAPIStreaming(
-              currentMessages,
-              modelToUse,
-              temperatureToUse,
-              maxTokensToUse,
-              activeTools
-            );
-          }
-
-          const reader = streamingResponse.getReader();
-          const decoder = new TextDecoder();
-          let assistantContent = '';
-          let hasToolCalls = false;
-          let isFirstContentOfIteration = true;
-          toolCallsMap.clear();
-
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value, { stream: true });
-            const lines = chunk.split('\n').filter(line => line.trim());
-
-            for (const line of lines) {
-              try {
-                const data = JSON.parse(line);
-                if (data.type === 'content') {
-                  if (isFirstContentOfIteration) {
-                    isFirstContentOfIteration = false;
-                    res.write('[STATUS_END]');
-                    if (fullContent.trim().length > 0) {
-                      const gap = '\n\n';
-                      assistantContent += gap;
-                      res.write(gap);
-                      fullContent += gap;
-                    }
-                  }
-                  assistantContent += data.content;
-                  res.write(data.content);
-                  fullContent += data.content;
-                } else if (data.type === 'tool_calls') {
-                  hasToolCalls = true;
-                  for (const delta of data.tool_calls) {
-                    const index = delta.index;
-                    if (!toolCallsMap.has(index)) {
-                      toolCallsMap.set(index, {
-                        id: delta.id || '',
-                        type: delta.type || 'function',
-                        function: {
-                          name: delta.function?.name || '',
-                          arguments: delta.function?.arguments || ''
-                        }
-                      });
-                    } else {
-                      const existing = toolCallsMap.get(index);
-                      if (delta.function?.name) existing.function.name = delta.function.name;
-                      if (delta.function?.arguments) existing.function.arguments += delta.function.arguments;
-                    }
-                  }
-                }
-              } catch (e) {
-                // Ignore parsing errors
-              }
+        const loopResult = await runAgentLoop({
+          messages: apiMessages,
+          tools: runTools,
+          toolContext: { persona, inputImageUrls, imageDimensions, policy: toolPolicy },
+          emit: {
+            emitContent: (text) => { res.write(text); },
+            emitToolText: (text) => { res.write(`\n\n${text}\n\n`); },
+            emitMarker: (marker) => { res.write(marker); },
+          },
+          callModel: (msgs, activeTools) => dispatchStreamingProvider(
+            runProvider,
+            msgs,
+            activeTools,
+            {
+              model: runModel,
+              temperature: runTemperature,
+              maxTokens: runMaxTokens,
+              reasoningEffort: reasoningEffortToUse,
             }
-          }
+          ),
+          log: (message) => console.log(`[${persona}] ${message}`),
+        });
 
-          if (hasToolCalls && toolCallsMap.size > 0) {
-            const toolCalls = Array.from(toolCallsMap.values()).filter(tc => tc.id && tc.function?.name);
+        let fullContent = loopResult.content;
 
-            // Append assistant message with tool calls to history
-            currentMessages.push({
-              role: 'assistant',
-              content: assistantContent || null,
-              tool_calls: toolCalls
-            });
-
-            // Execute tools, write status messages, and append tool response messages
-            for (const toolCall of toolCalls) {
-              const name = toolCall.function.name;
-              const argsStr = toolCall.function.arguments;
-              let result = '';
-
-              if (name === 'web_search') {
-                try {
-                  const params = JSON.parse(argsStr);
-                  // Write status marker to user for shimmering effect
-                  res.write(`[STATUS:Searching the web for "${params.query}"]`);
-                  const searchResults = await fetchWebSearchResults(params);
-
-                  // Truncate search results to protect context window
-                  result = searchResults.slice(0, 10000);
-                } catch (err: any) {
-                  result = `Error: ${err.message}`;
-                }
-              } else if (name === 'generate_image') {
-                try {
-                  const params = JSON.parse(argsStr);
-                  res.write(`[STATUS:Generating image with prompt: "${params.prompt}"]`);
-                  const imageMarkdown = createImageMarkdown({
-                    ...params,
-                    persona,
-                    inputImageUrls,
-                    imageWidth: imageDimensions?.width,
-                    imageHeight: imageDimensions?.height
-                  });
-                  // Stream the markdown directly to the user response
-                  res.write(`\n\n${imageMarkdown}\n\n`);
-
-                  result = `Image generated successfully. Markdown link: ${imageMarkdown}`;
-                } catch (err: any) {
-                  result = `Error: ${err.message}`;
-                }
-              } else if (name === 'list_skills') {
-                try {
-                  res.write('[STATUS:Reading skills library]');
-                  const list = Object.keys(SKILLS_DATA).map(key => ({
-                    name: SKILLS_DATA[key].name,
-                    description: SKILLS_DATA[key].description
-                  }));
-                  result = JSON.stringify(list, null, 2);
-                } catch (err: any) {
-                  result = `Error: ${err.message}`;
-                }
-              } else if (name === 'read_skill') {
-                try {
-                  const params = JSON.parse(argsStr);
-                  res.write(`[STATUS:Reading skill instructions for ${params.name}]`);
-                  const skill = SKILLS_DATA[params.name];
-                  if (skill) {
-                    result = skill.content;
-                  } else {
-                    result = `Error: Skill "${params.name}" not found. Available skills: ${Object.keys(SKILLS_DATA).join(', ')}`;
-                  }
-                } catch (err: any) {
-                  result = `Error: ${err.message}`;
-                }
-              }
-
-              currentMessages.push({
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                name: name,
-                content: result
-              });
-            }
-
-            // Loop again to call the LLM with the tool results
-            continue;
-          }
-
-          // No tool calls, meaning the assistant responded with final text. Done!
-          break;
-        }
-
-        // Check if max iterations reached and last response had tool calls
-        if (iteration >= maxIterations && toolCallsMap.size > 0) {
+        if (loopResult.hitMaxIterations) {
           const warning = '\n\n*System: Maximum reasoning iterations (5) reached. Stopped further tool executions.*';
           res.write(warning);
           fullContent += warning;
-        }
-
-        // Finalize rate limits & memories
-        const quotaCost = 1;
-        for (let i = 0; i < quotaCost; i++) {
-          incrementRateLimit(userId || null, ip, persona);
-        }
-
-        if (userId && fullContent) {
-          const memoryResult = await processMemoryTags(fullContent, userId, persona);
-          if (memoryResult.hasSavedMemory) {
-            res.write('\n\n[MEMORY_SAVED]');
-          }
-        }
-
-        res.write('[STATUS_END]');
-        res.end();
-        return;
-      } else {
-        const provider = (personaConfig as any).provider || 'groq';
-        if (provider === 'secretstoai' || provider === 'secrectstoai') {
-          streamingResponse = await callSecretsToAIAPIStreaming(
-            apiMessages,
-            modelToUse,
-            temperatureToUse,
-            maxTokensToUse,
-            toolsToUse
-          );
-        } else if (provider === 'eaon') {
-          streamingResponse = await callEaonAPIStreaming(
-            apiMessages,
-            modelToUse,
-            temperatureToUse,
-            maxTokensToUse,
-            toolsToUse
-          );
-        } else if (provider === 'nvidia' || provider === 'nim') {
-          streamingResponse = await callNvidiaAPIStreaming(
-            apiMessages,
-            modelToUse,
-            temperatureToUse,
-            maxTokensToUse,
-            toolsToUse
-          );
-        } else if (provider === 'pollinations') {
-          streamingResponse = await callPollinationsAPIStreaming(
-            apiMessages,
-            modelToUse,
-            temperatureToUse,
-            maxTokensToUse,
-            toolsToUse
-          );
-        } else if (provider === 'cerebras') {
-          streamingResponse = await callCerebrasAirAPIStreaming(
-            apiMessages,
-            toolsToUse,
-            modelToUse,
-            temperatureToUse,
-            maxTokensToUse
-          );
-        } else {
-          streamingResponse = await callGroqStandardAPIStreaming(
-            apiMessages,
-            modelToUse,
-            temperatureToUse,
-            maxTokensToUse,
-            toolsToUse,
-            reasoningEffortToUse
-          );
-        }
-      }
-
-      // Process streaming response
-      const reader = streamingResponse.getReader();
-      const decoder = new TextDecoder();
-      let fullContent = '';
-      let toolCallsMap: Map<number, any> = new Map(); // Accumulate tool calls by index
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) break;
-
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n').filter(line => line.trim());
-
-          for (const line of lines) {
-            try {
-              const data = JSON.parse(line);
-
-              if (data.type === 'content') {
-                fullContent += data.content;
-                res.write(data.content);
-              } else if (data.type === 'tool_calls') {
-                console.log('Received tool calls in stream:', JSON.stringify(data.tool_calls));
-                // Accumulate tool calls by index
-                for (const delta of data.tool_calls) {
-                  const index = delta.index;
-                  if (!toolCallsMap.has(index)) {
-                    toolCallsMap.set(index, {
-                      id: delta.id || '',
-                      type: delta.type || 'function',
-                      function: {
-                        name: delta.function?.name || '',
-                        arguments: delta.function?.arguments || ''
-                      }
-                    });
-                  } else {
-                    const existing = toolCallsMap.get(index);
-                    if (delta.function?.name) {
-                      existing.function.name = delta.function.name;
-                    }
-                    if (delta.function?.arguments) {
-                      existing.function.arguments += delta.function.arguments;
-                    }
-                  }
-                }
-              } else if (data.type === 'finish') {
-                // Process any accumulated tool calls
-                console.log('Processing tool calls, map size:', toolCallsMap.size);
-                if (toolCallsMap.size > 0) {
-                  for (const [_index, toolCall] of toolCallsMap.entries()) {
-                    console.log('Processing tool call:', toolCall.function?.name, 'args length:', toolCall.function?.arguments?.length);
-
-                    // Skip if arguments are empty or invalid
-                    if (!toolCall.function?.arguments || toolCall.function.arguments.trim() === '') {
-                      console.log('Skipping tool call with empty arguments');
-                      continue;
-                    }
-
-                    if (toolCall.function?.name === 'generate_image') {
-                      try {
-                        const params: ImageGenerationParams = JSON.parse(toolCall.function.arguments);
-
-                        if (inputImageUrls && inputImageUrls.length > 0) {
-                          params.inputImageUrls = inputImageUrls;
-                        }
-
-                        // Pass original image dimensions for edit operations
-                        if (imageDimensions) {
-                          params.imageWidth = imageDimensions.width;
-                          params.imageHeight = imageDimensions.height;
-                        }
-
-                        params.persona = persona;
-
-                        const imageMarkdown = createImageMarkdown(params);
-                        res.write(`\n\n${imageMarkdown}`);
-                        fullContent += `\n\n${imageMarkdown}`;
-                      } catch (error) {
-                        console.error('Error processing image generation:', error);
-                        console.error('Tool call arguments:', toolCall.function.arguments);
-                        const errorMsg = '\n\nSorry, I had trouble generating that image. Please try again.';
-                        res.write(errorMsg);
-                        fullContent += errorMsg;
-                      }
-                    } else if (toolCall.function?.name === 'web_search') {
-                      try {
-                        const params: WebSearchParams = JSON.parse(toolCall.function.arguments);
-
-                        // Show loading state
-                        const loadingMsg = '\n\n*Searching the web...*';
-                        res.write(loadingMsg);
-
-                        // Fetch actual search results
-                        const searchResults = await fetchWebSearchResults(params);
-
-                        // Clear loading message and show results
-                        const resultsMsg = `\n\n${searchResults}`;
-                        res.write(resultsMsg);
-                        fullContent += resultsMsg;
-                      } catch (error) {
-                        console.error('Error processing web search:', error);
-                        console.error('Tool call arguments:', toolCall.function.arguments);
-                        const errorMsg = '\n\nSorry, I had trouble performing that web search. Please try again.';
-                        res.write(errorMsg);
-                        fullContent += errorMsg;
-                      }
-                    }
-                  }
-                  // Fix: clear the map after processing so we don't double-fire if multiple finish headers arrive
-                  toolCallsMap.clear();
-                }
-                break;
-              }
-            } catch (error) {
-              console.error('Error parsing streaming chunk:', error);
-            }
-          }
         }
 
         // Increment rate limit after successful response (async, don't await)
@@ -2923,7 +2348,7 @@ ${TOOL_GUARDRAIL}
           }
         }
 
-
+        res.write('[STATUS_END]');
         res.end();
       } catch (error) {
         console.error('Streaming error:', error);
@@ -3164,11 +2589,12 @@ ${TOOL_GUARDRAIL}
         let iteration = 0;
         const maxIterations = 5;
         let finalContent = '';
+        const toolPolicy = createToolPolicy({ imageAllowed });
 
         while (iteration < maxIterations) {
           iteration++;
 
-          const activeTools = (iteration === maxIterations) ? [] : toolsToUse;
+          const activeTools = (iteration === maxIterations) ? [] : applyPolicy(toolsToUse, toolPolicy);
 
           console.log(`PRO Persona Agent Loop (non-streaming): Iteration ${iteration} of ${maxIterations}`);
 
@@ -3265,57 +2691,21 @@ ${TOOL_GUARDRAIL}
             });
 
             for (const toolCall of toolCalls) {
-              const name = toolCall.function?.name;
-              const argsStr = toolCall.function?.arguments || '{}';
-              let result = '';
-
-              if (name === 'web_search') {
-                try {
-                  const params = JSON.parse(argsStr);
-                  const searchResults = await fetchWebSearchResults(params);
-                  result = searchResults.slice(0, 10000);
-                } catch (err: any) {
-                  result = `Error: ${err.message}`;
+              const result = await executeTool(
+                toolCall,
+                { persona, inputImageUrls, imageDimensions, policy: toolPolicy },
+                {
+                  // Non-streaming: image markdown is folded into the final content,
+                  // and status markers have nowhere to go.
+                  emitText: (text) => { finalContent += (finalContent ? '\n\n' : '') + text; },
+                  emitMarker: () => {},
                 }
-              } else if (name === 'generate_image') {
-                try {
-                  const params = JSON.parse(argsStr);
-                  const imageMarkdown = createImageMarkdown({
-                    ...params,
-                    persona,
-                    inputImageUrls,
-                    imageWidth: imageDimensions?.width,
-                    imageHeight: imageDimensions?.height
-                  });
-                  result = `Image generated successfully. Markdown link: ${imageMarkdown}`;
-                  finalContent += (finalContent ? '\n\n' : '') + imageMarkdown;
-                } catch (err: any) {
-                  result = `Error: ${err.message}`;
-                }
-              } else if (name === 'list_skills') {
-                try {
-                  const list = Object.keys(SKILLS_DATA).map(key => ({
-                    name: SKILLS_DATA[key].name,
-                    description: SKILLS_DATA[key].description
-                  }));
-                  result = JSON.stringify(list, null, 2);
-                } catch (err: any) {
-                  result = `Error: ${err.message}`;
-                }
-              } else if (name === 'read_skill') {
-                try {
-                  const params = JSON.parse(argsStr);
-                  const skill = SKILLS_DATA[params.name];
-                  result = skill ? skill.content : `Error: Skill "${params.name}" not found.`;
-                } catch (err: any) {
-                  result = `Error: ${err.message}`;
-                }
-              }
+              );
 
               currentMessages.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
-                name: name,
+                name: toolCall.function?.name,
                 content: result
               });
             }
@@ -3439,43 +2829,27 @@ ${TOOL_GUARDRAIL}
 
       let fullContent = apiResponse.choices?.[0]?.message?.content || '';
 
-      // Process tool calls for image generation and web search
+      // Process tool calls. This legacy fallback has no loop to feed results
+      // back into, so tool output is appended to the response as before — but
+      // it still goes through the shared executor, so the image gate and the
+      // runtime backstop apply here too.
       const toolCalls = apiResponse.choices?.[0]?.message?.tool_calls || [];
       if (toolCalls.length > 0) {
+        const toolPolicy = createToolPolicy({ imageAllowed });
+
         for (const toolCall of toolCalls) {
-          if (toolCall.function?.name === 'generate_image') {
-            try {
-              const params: ImageGenerationParams = JSON.parse(toolCall.function.arguments);
-
-              if (inputImageUrls && inputImageUrls.length > 0) {
-                params.inputImageUrls = inputImageUrls;
-              }
-
-              // Pass original image dimensions for edit operations
-              if (imageDimensions) {
-                params.imageWidth = imageDimensions.width;
-                params.imageHeight = imageDimensions.height;
-              }
-
-              params.persona = persona;
-
-              const imageMarkdown = createImageMarkdown(params);
-              fullContent += `\n\n${imageMarkdown}`;
-            } catch (error) {
-              console.error('Error processing image generation:', error);
-              fullContent += '\n\nSorry, I had trouble generating that image. Please try again.';
+          const result = await executeTool(
+            toolCall,
+            { persona, inputImageUrls, imageDimensions, policy: toolPolicy },
+            {
+              emitText: (text) => { fullContent += `\n\n${text}`; },
+              emitMarker: () => {},
             }
-          } else if (toolCall.function?.name === 'web_search') {
-            try {
-              const params: WebSearchParams = JSON.parse(toolCall.function.arguments);
+          );
 
-              // Fetch actual search results
-              const searchResults = await fetchWebSearchResults(params);
-              fullContent += `\n\n${searchResults}`;
-            } catch (error) {
-              console.error('Error processing web search:', error);
-              fullContent += '\n\nSorry, I had trouble performing that web search. Please try again.';
-            }
+          // web_search emits nothing of its own; its results are the answer here.
+          if (toolCall.function?.name === 'web_search') {
+            fullContent += `\n\n${result}`;
           }
         }
       }
