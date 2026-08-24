@@ -22,15 +22,15 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
-    provider: 'pollinations', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon'
-    model: 'nemotron-3.5-lightning',
+    provider: 'nvidia', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon'
+    model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
     temperature: 0.8,
-    maxTokens: 16304,
+    maxTokens: 26304,
     flowState: {
-      provider: 'nvidia',
-      model: 'minimaxai/minimax-m3',
+      provider: 'pollinations',
+      model: 'nemotron-3.5-lightning',
       temperature: 0.8,
-      maxTokens: 16304,
+      maxTokens: 32304,
       quotaCost: 2
     },
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
