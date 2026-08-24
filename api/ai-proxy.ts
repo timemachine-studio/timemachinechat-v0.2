@@ -27,8 +27,8 @@ export const AI_PERSONAS = {
     temperature: 0.8,
     maxTokens: 16304,
     flowState: {
-      provider: 'groq',
-      model: 'openai/gpt-oss-20b',
+      provider: 'nvidia',
+      model: 'minimaxai/minimax-m3',
       temperature: 0.8,
       maxTokens: 16304,
       quotaCost: 2
