@@ -6,6 +6,7 @@ import {
   toApiMessages,
   selectTools,
   resolveImageAllowed,
+  resolveWebSearchAllowed,
   createToolPolicy,
   applyPolicy,
   executeTool,
@@ -2134,10 +2135,12 @@ ${TOOL_GUARDRAIL}
     let systemPromptToUse = enhancedSystemPrompt;
     // Decided in code, not asked of the model: see api/_lib/tools.ts.
     const imageAllowed = resolveImageAllowed(messages, !!imageData);
+    const searchAllowed = resolveWebSearchAllowed(messages);
     let toolsToUse: any[] = selectTools({
       specialModeConfig,
       includeSkills: persona === 'pro',
       imageAllowed,
+      searchAllowed,
     });
 
     // Apply temperature, maxTokens, and reasoningEffort overrides from special mode
@@ -2299,7 +2302,7 @@ ${TOOL_GUARDRAIL}
         // model instead of being spliced into the user's response, which is what
         // lets the runtime backstop refuse a bad generate_image call and have the
         // model recover on the next iteration.
-        const toolPolicy = createToolPolicy({ imageAllowed });
+        const toolPolicy = createToolPolicy({ imageAllowed, searchAllowed });
 
         const loopResult = await runAgentLoop({
           messages: apiMessages,
@@ -2589,7 +2592,7 @@ ${TOOL_GUARDRAIL}
         let iteration = 0;
         const maxIterations = 5;
         let finalContent = '';
-        const toolPolicy = createToolPolicy({ imageAllowed });
+        const toolPolicy = createToolPolicy({ imageAllowed, searchAllowed });
 
         while (iteration < maxIterations) {
           iteration++;
@@ -2835,7 +2838,7 @@ ${TOOL_GUARDRAIL}
       // runtime backstop apply here too.
       const toolCalls = apiResponse.choices?.[0]?.message?.tool_calls || [];
       if (toolCalls.length > 0) {
-        const toolPolicy = createToolPolicy({ imageAllowed });
+        const toolPolicy = createToolPolicy({ imageAllowed, searchAllowed });
 
         for (const toolCall of toolCalls) {
           const result = await executeTool(

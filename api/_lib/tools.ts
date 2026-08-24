@@ -196,6 +196,9 @@ const IMAGE_INTENT = /\b(image|images|picture|pictures|pic|pics|photo|photos|pho
 /** Asking for code or a built artifact. Always wins over IMAGE_INTENT. */
 const BUILD_INTENT = /\b(html|css|js|javascript|typescript|react|vue|svelte|python|java|rust|golang|sql|code|coding|script|scripts|function|class|component|api|endpoint|app|apps|application|website|webpage|web page|site|page|game|snippet|repo|repository|bug|bugs|error|exception|stack ?trace|refactor|debug|compile|npm|yarn|canvas|svg|animation|diagram|chart|graph|table|json|xml|regex|algorithm|database|query|server|backend|frontend|terminal|command|cli|docker|single file|one file)\b/i;
 
+/** Asking for something only a live lookup can answer. */
+const SEARCH_INTENT = /\b(search|google|look ?up|find out|check online|browse the web|web ?search|latest|newest|most recent|current|currently|today|tonight|yesterday|this week|this month|this year|right now|recent|recently|up to date|nowadays|news|headlines?|weather|forecast|who won|score|election|stock|share price|price of|how much (is|does|are)|release date|released|announced|launching|launched|update on|20(2[4-9]|3[0-9]))\b/i;
+
 /** Short transform instructions that follow, or accompany, an existing picture. */
 const EDIT_INTENT = /\b(make it|make this|turn it|turn this|change it|change this|edit it|edit this|modify it|modify this|redo|again|another one|instead|version of|in the style|restyle|recolou?r|colou?rize|brighter|darker|zoom|crop|remove the|add a|add an|but with|more like)\b/i;
 
@@ -231,6 +234,18 @@ export function wantsImageTool(input: ImageIntentInput): boolean {
   if (hasAttachedImage && EDIT_INTENT.test(lastUserText)) return true;
 
   return false;
+}
+
+/**
+ * Decide whether `web_search` belongs in this request.
+ *
+ * Gated for the same reason as the image tool. Gating only one of the two just
+ * moves the problem: with generate_image removed from a coding turn, web_search
+ * became the single remaining tool at index 0, and models that grab a tool
+ * because a tool exists went straight for it.
+ */
+export function wantsWebSearchTool(lastUserText: string = ''): boolean {
+  return SEARCH_INTENT.test(lastUserText);
 }
 
 export interface MessageLike {
@@ -269,8 +284,9 @@ export interface SelectToolsOptions {
   messages?: MessageLike[];
   /** The user attached an image to this turn. */
   hasAttachedImage?: boolean;
-  /** Pre-computed gate result. Supply it when the caller also needs the value. */
+  /** Pre-computed gate results. Supply them when the caller also needs the values. */
   imageAllowed?: boolean;
+  searchAllowed?: boolean;
 }
 
 /**
@@ -288,17 +304,21 @@ export function selectTools(opts: SelectToolsOptions): any[] {
     hasAttachedImage = false,
   } = opts;
 
-  // web_search leads the list on purpose. A model that has stopped reasoning
-  // about which tool fits and simply grabs the first one should land on the
-  // harmless tool, not the image generator.
   let tools: any[] = specialModeConfig && Array.isArray(specialModeConfig.tools)
     ? specialModeConfig.tools.map((t: string) => TOOL_MAP[t]).filter(Boolean)
     : [webSearchTool, imageGenerationTool];
 
+  // Both tools are gated. When a turn wants neither, the list comes back empty
+  // and the provider helpers omit the `tools` field entirely — the same request
+  // shape as the web-coding special mode, which has never had this problem.
   const imageAllowed = opts.imageAllowed ?? resolveImageAllowed(messages, hasAttachedImage);
+  const searchAllowed = opts.searchAllowed ?? resolveWebSearchAllowed(messages);
 
   if (!imageAllowed) {
     tools = tools.filter((t) => t?.function?.name !== "generate_image");
+  }
+  if (!searchAllowed) {
+    tools = tools.filter((t) => t?.function?.name !== "web_search");
   }
 
   if (includeSkills) {
@@ -353,6 +373,8 @@ export function toApiMessages(messages: MessageLike[] = []): Array<{ role: strin
 export interface ToolPolicy {
   /** Whether generate_image was allowed into this request at all. */
   imageAllowed: boolean;
+  /** Whether web_search was allowed into this request at all. */
+  searchAllowed: boolean;
   /** How many images may be produced in a single run. */
   maxImageCalls: number;
   imageCallsUsed: number;
@@ -360,9 +382,10 @@ export interface ToolPolicy {
   revoked: Set<string>;
 }
 
-export function createToolPolicy(opts: { imageAllowed: boolean; maxImageCalls?: number }): ToolPolicy {
+export function createToolPolicy(opts: { imageAllowed: boolean; searchAllowed?: boolean; maxImageCalls?: number }): ToolPolicy {
   return {
     imageAllowed: opts.imageAllowed,
+    searchAllowed: opts.searchAllowed ?? true,
     maxImageCalls: opts.maxImageCalls ?? 1,
     imageCallsUsed: 0,
     revoked: new Set<string>(),
@@ -373,6 +396,11 @@ export function createToolPolicy(opts: { imageAllowed: boolean; maxImageCalls?: 
 export function applyPolicy(tools: any[], policy?: ToolPolicy | null): any[] {
   if (!policy || policy.revoked.size === 0) return tools;
   return tools.filter((t) => !policy.revoked.has(t?.function?.name));
+}
+
+/** Whether this request should offer web_search, from the raw message list. */
+export function resolveWebSearchAllowed(messages: MessageLike[] = []): boolean {
+  return wantsWebSearchTool(deriveImageIntentText(messages).lastUserText);
 }
 
 /** Whether this request should offer generate_image, from the raw message list. */
@@ -424,6 +452,12 @@ export async function executeTool(
   const argsStr = toolCall.function?.arguments || '{}';
 
   if (name === 'web_search') {
+    if (ctx.policy && !ctx.policy.searchAllowed) {
+      // The model called a tool it was not given. Refuse, and take it away.
+      ctx.policy.revoked.add('web_search');
+      return 'web_search is not available for this request. Do not call it again. Answer the user directly from your own knowledge.';
+    }
+
     try {
       const params: WebSearchParams = JSON.parse(argsStr);
       await emit.emitMarker(`[STATUS:Searching the web for "${params.query}"]`);

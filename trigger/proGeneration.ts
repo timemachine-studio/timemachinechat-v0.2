@@ -27,8 +27,9 @@ export interface ProGenerationPayload {
   inputImageUrls?: string[];
   imageDimensions?: { width?: number; height?: number };
   hadImageInput?: boolean;
-  /** Result of the image intent gate, decided in /api/pro-generation. */
+  /** Results of the intent gates, decided in /api/pro-generation. */
   imageAllowed?: boolean;
+  searchAllowed?: boolean;
 }
 
 const MAX_ITERATIONS = 5;
@@ -82,7 +83,10 @@ export const proGeneration = task({
       }
 
       // ─── PRO agentic loop (shared with /api/ai-proxy) ─────────────────
-      const toolPolicy = createToolPolicy({ imageAllowed: payload.imageAllowed !== false });
+      const toolPolicy = createToolPolicy({
+        imageAllowed: payload.imageAllowed !== false,
+        searchAllowed: payload.searchAllowed !== false,
+      });
 
       const loopResult = await runAgentLoop({
         messages: payload.apiMessages,

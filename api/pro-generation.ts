@@ -8,7 +8,7 @@ import {
   fetchUserMemories,
   formatMemoriesForContext,
 } from './ai-proxy.js';
-import { TOOL_GUARDRAIL, selectTools, resolveImageAllowed, toApiMessages } from './_lib/tools.js';
+import { TOOL_GUARDRAIL, selectTools, resolveImageAllowed, resolveWebSearchAllowed, toApiMessages } from './_lib/tools.js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import { getAuthenticatedRequestUser } from './_lib/auth.js';
 import {
@@ -105,10 +105,12 @@ ${TOOL_GUARDRAIL}
   // PRO always gets the skills library tools
   // Decided in code, not asked of the model: see api/_lib/tools.ts.
   const imageAllowed = resolveImageAllowed(messages, !!imageData);
+  const searchAllowed = resolveWebSearchAllowed(messages);
   const toolsToUse: any[] = selectTools({
     specialModeConfig,
     includeSkills: true,
     imageAllowed,
+    searchAllowed,
   });
 
   const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
@@ -207,6 +209,7 @@ ${TOOL_GUARDRAIL}
     imageDimensions,
     hadImageInput: hasImageInput && imageUrlsForOCR.length > 0,
     imageAllowed,
+    searchAllowed,
   };
 
   try {
