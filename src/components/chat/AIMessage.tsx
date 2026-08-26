@@ -46,14 +46,6 @@ const getPersonaColor = (persona: keyof typeof AI_PERSONAS = 'default') => {
       return 'text-pink-400';
     case 'pro':
       return 'text-cyan-400';
-    case 'chatgpt':
-      return 'text-green-400';
-    case 'gemini':
-      return 'text-blue-400';
-    case 'claude':
-      return 'text-orange-400';
-    case 'grok':
-      return 'text-gray-400';
     default:
       return 'text-purple-400';
   }
@@ -65,14 +57,6 @@ const getPersonaShimmerColors = (persona: keyof typeof AI_PERSONAS = 'default') 
       return { baseColor: '#ec4899', shimmerColor: '#ffffff' }; // Pink base with white shimmer
     case 'pro':
       return { baseColor: '#06b6d4', shimmerColor: '#ffffff' }; // Cyan base with white shimmer
-    case 'chatgpt':
-      return { baseColor: '#22c55e', shimmerColor: '#ffffff' }; // Green base with white shimmer
-    case 'gemini':
-      return { baseColor: '#3b82f6', shimmerColor: '#ffffff' }; // Blue base with white shimmer
-    case 'claude':
-      return { baseColor: '#f97316', shimmerColor: '#ffffff' }; // Orange base with white shimmer
-    case 'grok':
-      return { baseColor: '#9ca3af', shimmerColor: '#ffffff' }; // Gray base with white shimmer
     default:
       return { baseColor: '#a855f7', shimmerColor: '#ffffff' }; // Purple base with white shimmer
   }
@@ -80,7 +64,7 @@ const getPersonaShimmerColors = (persona: keyof typeof AI_PERSONAS = 'default') 
 
 const extractMentionedPersona = (message: string | null): keyof typeof AI_PERSONAS | null => {
   if (!message) return null;
-  const match = message.match(/^@(chatgpt|gemini|claude|grok|girlie|pro)\s/i);
+  const match = message.match(/^@(girlie|pro)\s/i);
   return match ? match[1].toLowerCase() as keyof typeof AI_PERSONAS : null;
 };
 
@@ -173,30 +157,6 @@ function AIMessageComponent({
           gradient: 'from-cyan-950/90 to-cyan-900/90',
           border: 'border-cyan-500/20',
           shadow: 'shadow-[0_0_30px_rgba(34,211,238,0.2)]'
-        };
-      case 'chatgpt':
-        return {
-          gradient: 'from-green-950/90 to-green-900/90',
-          border: 'border-green-500/20',
-          shadow: 'shadow-[0_0_30px_rgba(34,197,94,0.2)]'
-        };
-      case 'gemini':
-        return {
-          gradient: 'from-blue-950/90 to-blue-900/90',
-          border: 'border-blue-500/20',
-          shadow: 'shadow-[0_0_30px_rgba(59,130,246,0.2)]'
-        };
-      case 'claude':
-        return {
-          gradient: 'from-orange-950/90 to-orange-900/90',
-          border: 'border-orange-500/20',
-          shadow: 'shadow-[0_0_30px_rgba(249,115,22,0.2)]'
-        };
-      case 'grok':
-        return {
-          gradient: 'from-gray-950/90 to-gray-900/90',
-          border: 'border-gray-500/20',
-          shadow: 'shadow-[0_0_30px_rgba(156,163,175,0.2)]'
         };
       default:
         return {

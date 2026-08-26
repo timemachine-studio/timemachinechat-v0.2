@@ -21,6 +21,7 @@ import { StageMode } from './components/chat/StageMode';
 import { RateLimitModal } from './components/modals/RateLimitModal';
 import { WelcomeModal } from './components/modals/WelcomeModal';
 import { AuthModal, OnboardingModal, AccountPage } from './components/auth';
+import { PrivacyPage, TermsPage } from './components/legal';
 import { ChatHistoryPage } from './components/chat/ChatHistoryPage';
 import { SettingsPage } from './components/settings/SettingsPage';
 import { AlbumPage } from './components/album/AlbumPage';
@@ -283,7 +284,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     }
   }, [playQueryFromNav, handleLyricsPlay, sessionToLoad, healthcareModeFromNav]);
 
-  const { isRateLimited, getRemainingMessages, incrementCount, isAnonymous } = useAnonymousRateLimit();
+  const { isRateLimited, getRemainingMessages, isAnonymous } = useAnonymousRateLimit(currentPersona, isLoading);
 
   // Wrapper for persona change that also persists to profile
   const handlePersonaChange = useCallback((persona: keyof typeof AI_PERSONAS) => {
@@ -451,7 +452,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     // Minimize lyrics view for normal user requests to keep the AI functional in view
     setIsLyricsMaximized(false);
 
-    const mentionMatch = message.match(/^@(chatgpt|gemini|claude|grok|girlie|pro)\s/i);
+    const mentionMatch = message.match(/^@(girlie|pro)\s/i);
     const targetModel = mentionMatch ? mentionMatch[1].toLowerCase() : currentPersona;
 
     if (isAnonymous && isRateLimited(targetModel)) {
@@ -460,12 +461,6 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
         authMessage = "PRO mode requires a TimeMachine ID. Create one to access advanced features!";
       } else if (targetModel === 'girlie') {
         authMessage = "Girlie mode requires a TimeMachine ID. Create one to unlock this persona!";
-      } else if (targetModel === 'gemini') {
-        authMessage = "@Gemini requires a TimeMachine ID. Create one to chat with Gemini!";
-      } else if (targetModel === 'claude') {
-        authMessage = "@Claude requires a TimeMachine ID. Create one to chat with Claude!";
-      } else if (targetModel === 'grok') {
-        authMessage = "@Grok requires a TimeMachine ID. Create one to chat with Grok!";
       } else {
         authMessage = "You've used your 3 free messages! Create a TimeMachine ID to continue chatting.";
       }
@@ -474,14 +469,14 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
       return;
     }
 
-    if (isAnonymous) {
-      incrementCount(targetModel);
-    }
-
+    // No optimistic increment: the count is re-read from the server when the
+    // turn finishes (see useAnonymousRateLimit's falling-edge effect), so a
+    // failed generation leaves it unchanged — production-check.md 0.4.
     await handleSendMessage(message, imageUrl, imageUrls, imageDimensions, replyToData || replyTo || undefined, specialMode, pdfData, pdfFileName);
+
     // Clear reply after sending
     setReplyTo(null);
-  }, [currentPersona, isAnonymous, isRateLimited, incrementCount, handleSendMessage, replyTo, handleLyricsPlay, setIsLyricsMaximized]);
+  }, [currentPersona, isAnonymous, isRateLimited, handleSendMessage, replyTo, handleLyricsPlay, setIsLyricsMaximized]);
 
   // Reply handlers for group chat
   const handleReply = useCallback((message: { id: number; content: string; sender_nickname?: string; isAI: boolean }) => {
@@ -1149,9 +1144,11 @@ function AppContent() {
       } />
       <Route path="/settings" element={<><SEOHead title="Settings" description="Customize your TimeMachine Chat experience with themes, personas, and preferences." path="/settings" noIndex /><SettingsPage /></>} />
       <Route path="/about" element={<><SEOHead title="About" description="Learn about TimeMachine — the super app bringing AI personas, privacy-first design, and intelligent tools into one chat interface. Built by TimeMachine Mafia." path="/about" /><AboutPage /></>} />
-      <Route path="/personas" element={<><SEOHead title="Personas" description="Meet TimeMachine AI personas — TimeMachine Air for everyday speed, TimeMachine Girlie for vibe-check conversations, and TimeMachine PRO for advanced intelligence. Plus ChatGPT, Gemini, Claude, and Grok." path="/personas" /><PersonasPage /></>} />
+      <Route path="/personas" element={<><SEOHead title="Personas" description="Meet the TimeMachine AI personas — TimeMachine Air for everyday speed, TimeMachine Girlie for vibe-check conversations, and TimeMachine PRO for advanced intelligence." path="/personas" /><PersonasPage /></>} />
       <Route path="/features" element={<><SEOHead title="Features" description="Explore TimeMachine features — Contour command palette with 30+ tools, group chat, TM Healthcare, image generation, music streaming, memory system, voice input, and more." path="/features" /><FeaturesPage /></>} />
       <Route path="/contact" element={<><SEOHead title="Contact" description="Get in touch with the TimeMachine team for support, feedback, or collaboration." path="/contact" /><ContactPage /></>} />
+      <Route path="/privacy" element={<><SEOHead title="Privacy Policy" description="How TimeMachine Chat collects, uses, and protects your data — including which third-party AI providers receive your prompts." path="/privacy" /><PrivacyPage /></>} />
+      <Route path="/terms" element={<><SEOHead title="Terms of Service" description="The terms governing your use of TimeMachine Chat." path="/terms" /><TermsPage /></>} />
       <Route path="/album" element={<><SEOHead title="Album" path="/album" noIndex /><AlbumPage /></>} />
       <Route path="/memories" element={<><SEOHead title="Memories" path="/memories" noIndex /><MemoriesPage /></>} />
       <Route path="/help" element={<><SEOHead title="Help" description="Get help with TimeMachine — learn about AI personas, group chats, image generation, and all features." path="/help" /><HelpPage /></>} />

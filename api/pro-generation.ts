@@ -10,7 +10,13 @@ import {
 } from './ai-proxy.js';
 import { TOOL_GUARDRAIL, THINKING_DIRECTIVE, selectTools, resolveImageAllowed, resolveWebSearchAllowed, toApiMessages } from './_lib/tools.js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
-import { getAuthenticatedRequestUser } from './_lib/auth.js';
+import {
+  getAuthenticatedRequestUser,
+  getRequestAccessToken,
+  createUserScopedClient,
+  assertOwnUserId,
+} from './_lib/auth.js';
+import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
 import {
   attachProJobRunId,
   createProJob,
@@ -56,8 +62,21 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   const clientIP = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket.remoteAddress || 'unknown';
   const ip = Array.isArray(clientIP) ? clientIP[0] : clientIP;
 
-  const withinLimit = await checkRateLimit(userId, ip, 'pro');
-  if (!withinLimit) {
+  // PRO has no anonymous allowance — an account is required.
+  if (!userId) {
+    return res.status(401).json({ error: 'Sign in to use TimeMachine PRO', type: 'authRequired' });
+  }
+
+  const limitOutcome = await checkRateLimit(userId, ip, 'pro', {
+    provider: (personaConfig as { provider?: string }).provider,
+  });
+  if (!limitOutcome.allowed) {
+    if (limitOutcome.reason === 'backend_error' || limitOutcome.reason === 'spend_ceiling') {
+      return res.status(503).json({
+        error: 'Service temporarily unavailable',
+        type: limitOutcome.reason === 'backend_error' ? 'rateLimitBackend' : 'spendCeiling',
+      });
+    }
     return res.status(429).json({
       error: 'Rate limit exceeded',
       type: 'rateLimit',
@@ -79,7 +98,10 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
   let memoryContext = '';
   if (userId) {
-    const memories = await fetchUserMemories(userId, 'pro');
+    assertOwnUserId(userId, authUser?.id ?? null);
+    const accessToken = getRequestAccessToken(req);
+    const userClient = (accessToken && createUserScopedClient(accessToken)) || undefined;
+    const memories = await fetchUserMemories(userId, 'pro', userClient);
     const userProfile = userMemories as { nickname?: string; about_me?: string } | undefined;
     memoryContext = formatMemoriesForContext(memories, userProfile);
   }
@@ -269,12 +291,14 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  applyCors(req, res, 'GET, POST, OPTIONS');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+
+  if (!hasAcceptableOrigin(req)) {
+    return res.status(403).json({ error: 'Origin not allowed' });
   }
 
   try {

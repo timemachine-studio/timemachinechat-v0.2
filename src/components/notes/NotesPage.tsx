@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { sendNotesAIRequest } from '../../services/ai/notesAiService';
+import { renderInline } from './renderInline';
 
 // ─── types ──────────────────────────────────────────────────────────
 
@@ -749,19 +750,6 @@ function ImageBlock({ block, onChange, onDelete, onDuplicate, onResize, dragCont
       )}
     </div>
   );
-}
-
-// ─── inline markdown renderer ────────────────────────────────────────
-
-function renderInline(text: string): string {
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\*\*(.+?)\*\*/gs, '<strong>$1</strong>')
-    .replace(/\*([^*\n]+?)\*/gs, '<em>$1</em>')
-    .replace(/__(.+?)__/gs, '<u>$1</u>')
-    .replace(/\[color:([^\]]+)\](.*?)\[\/color\]/gs, '<span style="color:$1">$2</span>')
-    .replace(/\[bg:([^\]]+)\](.*?)\[\/bg\]/gs, '<span style="background-color:$1;border-radius:3px;padding:0 2px">$2</span>')
-    .replace(/\n/g, '<br>');
 }
 
 // ─── graph block ─────────────────────────────────────────────────────

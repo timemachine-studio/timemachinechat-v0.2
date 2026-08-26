@@ -674,7 +674,7 @@ export function useChat(
     let messageContent = content;
 
     // Check for @persona mentions (case-insensitive)
-    const mentionMatch = content.match(/^@(chatgpt|gemini|claude|grok|girlie|pro)\s+(.+)$/i);
+    const mentionMatch = content.match(/^@(girlie|pro)\s+(.+)$/i);
     if (mentionMatch) {
       const mentionedModel = mentionMatch[1].toLowerCase();
       messagePersona = mentionedModel as keyof typeof AI_PERSONAS;

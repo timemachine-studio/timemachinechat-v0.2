@@ -482,7 +482,7 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
       setShowMentionCall(true);
     } else if (showMentionCall) {
       // Check if user has completed typing a mention (case-insensitive)
-      const completedMention = newValue.match(/@(chatgpt|gemini|claude|grok)\s/i);
+      const completedMention = newValue.match(/@(girlie|pro)\s/i);
       if (completedMention || !newValue.includes('@')) {
         setShowMentionCall(false);
       }

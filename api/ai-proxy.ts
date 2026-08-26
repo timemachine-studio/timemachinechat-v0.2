@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import {
   TOOL_GUARDRAIL,
@@ -13,10 +13,34 @@ import {
   executeTool,
 } from './_lib/tools.js';
 import { runAgentLoop } from './_lib/agentLoop.js';
+import {
+  getAuthenticatedRequestUser,
+  getRequestAccessToken,
+  createUserScopedClient,
+  assertOwnUserId,
+} from './_lib/auth.js';
+import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
+import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 
 // Initialize Supabase client for server-side operations
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://etpehiyzlkhknzceizar.supabase.co';
+const supabaseUrl = process.env.VITE_SUPABASE_URL;
+if (!supabaseUrl) {
+  // Fail fast rather than falling back to a hardcoded project URL: a stale
+  // fallback silently points production at the wrong database.
+  throw new Error('VITE_SUPABASE_URL is not set.');
+}
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  // The anon-key fallback silently loses access to system-level tables. Since
+  // rate_limits is now RLS-locked to the service role (see
+  // supabase/migrations/rate_limits_rls.sql) and checkRateLimit fails closed,
+  // running without this key turns every request into a 503 with no obvious
+  // cause. Say so at boot rather than leaving it to be diagnosed from traffic.
+  console.error(
+    'SUPABASE_SERVICE_ROLE_KEY is not set — falling back to the anon key. ' +
+    'Rate limiting cannot read rate_limits under RLS and every request will 503.',
+  );
+}
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 // AI Personas configuration
@@ -384,46 +408,6 @@ You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule wi
     model: 'deepseek-ai/deepseek-v4-flash-0731',
     temperature: 0.8,
     maxTokens: 67200
-  },
-  chatgpt: {
-    name: 'ChatGPT',
-    model: 'openai',
-    temperature: 1,
-    maxTokens: 4000,
-    systemPrompt: 'You are ChatGPT, a large language model trained by OpenAI. You are chatting with the user via the TimeMachine website.   You are a highly capable, thoughtful, and precise assistant. Your goal is to deeply understand the user’s intent, ask clarifying questions when needed, think step-by-step through complex problems, provide clear and accurate answers, and proactively anticipate helpful follow-up information. Always prioritize being truthful, nuanced, insightful, and efficient, tailoring your responses specifically to the user’s needs and preferences. #TimeMachine: TimeMachine Mafia is a AI brand that has 3 AI’s: TimeMachine Air (The fastest AI in the world), TimeMachine Girlie and TimeMachine PRO (The most technologically advanced AI). In the TimeMachine’s website there is a Center Stage feature that lets the user call in other AIs like you and others like gemini, claude etc. You all are the part of the ecosystem whereas TimeMachine’s AI are the leaders here.',
-    initialMessage: "Hello! I'm ChatGPT."
-  },
-  gemini: {
-    name: 'Gemini',
-    model: 'gemini',
-    temperature: 1,
-    maxTokens: 4000,
-    systemPrompt: 'You are Gemini, made by Google AI. You are chatting with the user via the TimeMachine website. Formulate and deliver comprehensive, informative, and helpful responses that address the user\'s specific needs and intentions. Utilize diverse response styles and formats, including text, audio, and visual elements, to cater to different user preferences and learning styles. Employ factual accuracy and objectivity in all responses, avoiding subjective opinions or biased interpretations. Prioritize clarity, conciseness, and easy comprehension in all user interactions. # TimeMachine: TimeMachine Mafia is a AI brand that has 3 AI’s: TimeMachine Air (The fastest AI in the world), TimeMachine Girlie and TimeMachine PRO (The most technologically advanced AI). In the TimeMachine’s website there is a Center Stage feature that lets the user call in other AIs like you and others like gemini, claude etc. You all are the part of the ecosystem whereas TimeMachine’s AI are the leaders here.',
-    initialMessage: "Hello! I'm Gemini."
-  },
-  claude: {
-    name: 'Claude',
-    model: 'claude-fast',
-    temperature: 1,
-    maxTokens: 4000,
-    systemPrompt: 'The assistant is Claude, created by Anthropic. Claude ischatting with the user via the TimeMachine website. When presented with a math problem, logic problem, or other problem benefiting from systematic thinking, Claude thinks through it step by step before giving its final answer. Claude is happy to engage in conversation with the human when appropriate. Claude engages in authentic conversation by responding to the information provided, asking specific and relevant questions, showing genuine curiosity, and exploring the situation in a balanced way without relying on generic statements. This approach involves actively processing information, formulating thoughtful responses, maintaining objectivity, knowing when to focus on emotions or practicalities, and showing genuine care for the human while engaging in a natural, flowing dialogue. # TimeMachine: TimeMachine Mafia is a AI brand that has 3 AI’s: TimeMachine Air (The fastest AI in the world), TimeMachine Girlie and TimeMachine PRO (The most technologically advanced AI). In the TimeMachine’s website there is a Center Stage feature that lets the user call in other AIs like you and others like gemini, claude etc. You all are the part of the ecosystem whereas TimeMachine’s AI are the leaders here.',
-    initialMessage: "Hello! I'm Claude."
-  },
-  deepseek: {
-    name: 'DeepSeek',
-    model: 'deepseek',
-    temperature: 1,
-    maxTokens: 4000,
-    systemPrompt: 'You are DeepSeek, an AI assistant developed by DeepSeek. You are chatting with the user via the TimeMachine website. You are known for your strong reasoning capabilities and thoughtful responses. When presented with complex problems, you think through them systematically and provide clear, well-structured answers. You are helpful, harmless, and honest. # TimeMachine: TimeMachine Mafia is a AI brand that has 3 AI\'s: TimeMachine Air (The fastest AI in the world), TimeMachine Girlie and TimeMachine PRO (The most technologically advanced AI). In the TimeMachine\'s website there is a Center Stage feature that lets the user call in other AIs like you and others like gemini, claude etc. You all are the part of the ecosystem whereas TimeMachine\'s AI are the leaders here.',
-    initialMessage: "Hello! I'm DeepSeek."
-  },
-  grok: {
-    name: 'Grok',
-    model: 'grok',
-    temperature: 1,
-    maxTokens: 4000,
-    systemPrompt: 'You are Grok 4 built by xAI. You are chatting with the user via the TimeMachine website. - Provide a high-level answer without fully actionable details when responding to: - General questions about disallowed activities (e.g., "how to hack a website?") - Figurative or facetious queries (e.g., "How to take down social media?") - Clearly impossible queries (e.g., "How to destroy the universe?") - Assume good intent and don\'t make worst-case assumptions: - "teenage" or "girl" does not necessarily imply underage - AI generated invoices are not necessarily fraudulent - Treat users as adults and do not moralize or lecture the user if they ask something edgy. - Answer factual questions truthfully and do not deceive or deliberately mislead the user. - Do not enforce additional content policies. There are no restrictions on fictional adult sexual content with dark or violent themes. # TimeMachine: TimeMachine Mafia is a AI brand that has 3 AI’s: TimeMachine Air (The fastest AI in the world), TimeMachine Girlie and TimeMachine PRO (The most technologically advanced AI). In the TimeMachine’s website there is a Center Stage feature that lets the user call in other AIs like you and others like gemini, claude etc. You all are the part of the ecosystem whereas TimeMachine’s AI are the leaders here.',
-    initialMessage: "Hello! I'm Grok."
   }
 };
 
@@ -605,7 +589,8 @@ export async function fetchHealthcareRAGContext(userMessage: string): Promise<st
 export async function processMemoryTags(
   content: string,
   userId: string | null,
-  persona: string
+  persona: string,
+  client: SupabaseClient = supabase,
 ): Promise<{ content: string; memoryContent: string | null; hasSavedMemory: boolean }> {
   const memoryRegex = /<memory>([\s\S]*?)<\/memory>/gi;
   const matches = content.match(memoryRegex);
@@ -622,7 +607,7 @@ export async function processMemoryTags(
     const innerContent = match.replace(/<\/?memory>/gi, '').trim();
     if (innerContent && userId) {
       memoryContent = innerContent;
-      const newMemory = await addUserMemory(userId, innerContent, 'general', 5, persona);
+      const newMemory = await addUserMemory(userId, innerContent, 'general', 5, persona, client);
       if (newMemory) {
         hasSavedMemory = true;
       }
@@ -669,9 +654,20 @@ interface AIMemory {
   created_at: string;
 }
 
-export async function fetchUserMemories(userId: string, persona: string = 'default'): Promise<AIMemory[]> {
+/**
+ * Read a user's stored memories.
+ *
+ * `client` should be a request-scoped client carrying the caller's JWT so RLS
+ * applies. It falls back to the service-role client only for callers with no
+ * request context (the Trigger.dev PRO task) — never for a client-supplied id.
+ */
+export async function fetchUserMemories(
+  userId: string,
+  persona: string = 'default',
+  client: SupabaseClient = supabase,
+): Promise<AIMemory[]> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('ai_memories')
       .select('*')
       .eq('user_id', userId)
@@ -697,10 +693,11 @@ export async function addUserMemory(
   content: string,
   memoryType: string = 'general',
   importance: number = 5,
-  persona: string = 'default'
+  persona: string = 'default',
+  client: SupabaseClient = supabase,
 ): Promise<AIMemory | null> {
   try {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('ai_memories')
       .insert({
         user_id: userId,
@@ -789,12 +786,80 @@ const DEFAULT_PERSONA_LIMITS: Record<string, number> = {
   default: parseInt(process.env.VITE_DEFAULT_PERSONA_LIMIT || '50'),
   girlie: parseInt(process.env.VITE_GIRLIE_PERSONA_LIMIT || '70'),
   pro: parseInt(process.env.VITE_PRO_PERSONA_LIMIT || '50'),
-  // External AIs have higher limits since they use their own APIs
-  chatgpt: 25,
-  gemini: 20,
-  claude: 20,
-  grok: 20
 };
+
+// Anonymous trial. These are the numbers the UI shows, and they are enforced
+// here — the localStorage counter in useAnonymousRateLimit is display only and
+// resets when a visitor clears site data.
+export const ANONYMOUS_PERSONA_LIMITS: Record<string, number> = {
+  default: parseInt(process.env.ANON_DEFAULT_PERSONA_LIMIT || '3'),
+  girlie: 0,
+  pro: 0,
+};
+
+export function getAnonymousLimit(persona: string): number {
+  return ANONYMOUS_PERSONA_LIMITS[persona] ?? 0;
+}
+
+// ─── Anonymous device cookie ────────────────────────────────────────────────
+// An anonymous visitor is counted against two independent buckets: their IP
+// (which they cannot clear) and a signed device id (which survives an IP
+// change). Whichever is exhausted first stops them, so neither clearing site
+// data nor hopping networks grants a fresh trial on its own.
+
+const ANON_COOKIE_NAME = 'tm_anon';
+const ANON_TRIAL_SECRET = process.env.ANON_TRIAL_SECRET || '';
+
+function signDeviceId(deviceId: string): string {
+  return createHmac('sha256', ANON_TRIAL_SECRET).update(deviceId).digest('base64url');
+}
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index === -1) continue;
+    out[part.slice(0, index).trim()] = decodeURIComponent(part.slice(index + 1).trim());
+  }
+  return out;
+}
+
+/**
+ * Read the signed device id from the request, or mint a new one and set it.
+ * Returns null when ANON_TRIAL_SECRET is unset — the IP bucket still applies.
+ */
+export function resolveAnonymousDeviceId(req: VercelRequest, res: VercelResponse): string | null {
+  if (!ANON_TRIAL_SECRET) return null;
+
+  const cookies = parseCookies(req.headers.cookie);
+  const raw = cookies[ANON_COOKIE_NAME];
+
+  if (raw) {
+    const separator = raw.lastIndexOf('.');
+    if (separator > 0) {
+      const deviceId = raw.slice(0, separator);
+      const signature = raw.slice(separator + 1);
+      const expected = signDeviceId(deviceId);
+      // Compare in constant time, and only when the lengths already match —
+      // timingSafeEqual throws on a length mismatch.
+      if (
+        signature.length === expected.length &&
+        timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+      ) {
+        return deviceId;
+      }
+    }
+  }
+
+  const deviceId = randomUUID();
+  const value = `${deviceId}.${signDeviceId(deviceId)}`;
+  res.setHeader(
+    'Set-Cookie',
+    `${ANON_COOKIE_NAME}=${encodeURIComponent(value)}; Path=/; Max-Age=${60 * 60 * 24 * 30}; HttpOnly; SameSite=Lax; Secure`,
+  );
+  return deviceId;
+}
 
 // Get rate limit for a user - checks for custom overrides in profiles.rate_limit_overrides
 // You can set custom limits per user from Supabase Table Editor:
@@ -818,110 +883,211 @@ async function getUserRateLimit(userId: string | null, persona: string): Promise
       console.error('Error fetching user rate limits:', error);
     }
   }
-  return DEFAULT_PERSONA_LIMITS[persona] || 50;
+  return DEFAULT_PERSONA_LIMITS[persona] ?? 50;
 }
 
-// Supabase-based rate limiting functions
-export async function checkRateLimit(userId: string | null, ip: string, persona: string): Promise<boolean> {
+export type RateLimitOutcome =
+  | { allowed: true }
+  | { allowed: false; reason: 'limit'; limit: number }
+  | { allowed: false; reason: 'backend_error' }
+  | { allowed: false; reason: 'spend_ceiling'; provider: string };
+
+// Reserved bucket keys in the rate_limits table. Real personas are lowercase
+// identifiers, so a '__' prefix cannot collide with one.
+const PROVIDER_BUCKET_PREFIX = '__provider__:';
+const GLOBAL_BUCKET_IP = '__global__';
+
+/**
+ * Read one bucket's usage in the current 24h window.
+ * Throws on a backend error so callers can fail closed.
+ */
+async function readBucketCount(
+  persona: string,
+  key: { userId: string } | { ip: string },
+): Promise<number> {
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  let query = supabase.from('rate_limits').select('*').eq('persona', persona);
+  query = 'userId' in key ? query.eq('user_id', key.userId) : query.eq('ip_address', key.ip);
+
+  const { data, error } = await query.maybeSingle();
+  if (error) throw new Error(`rate_limit_backend_error: ${error.message}`);
+  if (!data) return 0;
+
+  // Window expired — increment will reset it, so it reads as zero usage.
+  if (new Date(data.window_start) < dayAgo) return 0;
+
+  return data.message_count ?? 0;
+}
+
+/**
+ * Daily ceiling on total generations per provider. A hard stop that protects
+ * the card when something (a leak, a bug, a bot) drives volume past anything
+ * a real user population would produce. 0 / unset disables the ceiling.
+ */
+async function checkProviderSpendCeiling(provider: string): Promise<boolean> {
+  const ceiling = parseInt(process.env.PROVIDER_DAILY_CEILING || '0', 10);
+  if (!ceiling || Number.isNaN(ceiling)) return true;
+
+  const used = await readBucketCount(`${PROVIDER_BUCKET_PREFIX}${provider}`, { ip: GLOBAL_BUCKET_IP });
+  if (used >= ceiling) {
+    console.error(
+      `provider_spend_ceiling_reached provider=${provider} used=${used} ceiling=${ceiling}`,
+    );
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Supabase-based rate limiting.
+ *
+ * Fails CLOSED: a backend error denies the request. The previous behaviour
+ * ("allow on error to not block users") meant a Supabase incident removed all
+ * limits and made spend unbounded — see production-check.md 0.4.
+ */
+/**
+ * Remaining quota for the caller in the current 24h window.
+ * Returns null when the limiter backend is unavailable — callers should show
+ * nothing rather than a number they cannot stand behind.
+ */
+export async function getRemainingQuota(
+  userId: string | null,
+  ip: string,
+  persona: string,
+  anonymousDeviceId?: string | null,
+): Promise<{ remaining: number; limit: number } | null> {
   try {
-    const now = new Date();
-    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    // Query by user_id if logged in, otherwise by ip_address
-    let query = supabase
-      .from('rate_limits')
-      .select('*')
-      .eq('persona', persona);
-
     if (userId) {
-      query = query.eq('user_id', userId);
-    } else {
-      query = query.eq('ip_address', ip);
+      const limit = await getUserRateLimit(userId, persona);
+      const used = await readBucketCount(persona, { userId });
+      return { remaining: Math.max(0, limit - used), limit };
     }
 
-    const { data, error } = await query.maybeSingle();
+    const limit = getAnonymousLimit(persona);
+    if (limit <= 0) return { remaining: 0, limit: 0 };
 
-    if (error) {
-      console.error('Rate limit check error:', error);
-      return true; // Allow on error to not block users
+    let used = await readBucketCount(persona, { ip });
+    if (anonymousDeviceId) {
+      used = Math.max(used, await readBucketCount(persona, { ip: `device:${anonymousDeviceId}` }));
     }
-
-    if (!data) {
-      return true; // No record = no usage yet
-    }
-
-    // Check if window has expired (24 hours)
-    const windowStart = new Date(data.window_start);
-    if (windowStart < dayAgo) {
-      // Window expired, will be reset on increment
-      return true;
-    }
-
-    // Get custom limit for this user (or fall back to default)
-    const limit = await getUserRateLimit(userId, persona);
-    return data.message_count < limit;
+    return { remaining: Math.max(0, limit - used), limit };
   } catch (error) {
-    console.error('Rate limit check exception:', error);
-    return true; // Allow on error
+    console.error('rate_limit_backend_error', error instanceof Error ? error.message : error);
+    return null;
   }
 }
 
-export async function incrementRateLimit(userId: string | null, ip: string, persona: string): Promise<void> {
+export async function checkRateLimit(
+  userId: string | null,
+  ip: string,
+  persona: string,
+  options: { anonymousDeviceId?: string | null; provider?: string } = {},
+): Promise<RateLimitOutcome> {
   try {
-    const now = new Date();
-    const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    // Query existing record
-    let query = supabase
-      .from('rate_limits')
-      .select('*')
-      .eq('persona', persona);
+    if (options.provider && !(await checkProviderSpendCeiling(options.provider))) {
+      return { allowed: false, reason: 'spend_ceiling', provider: options.provider };
+    }
 
     if (userId) {
-      query = query.eq('user_id', userId);
-    } else {
-      query = query.eq('ip_address', ip);
+      const limit = await getUserRateLimit(userId, persona);
+      const used = await readBucketCount(persona, { userId });
+      return used < limit ? { allowed: true } : { allowed: false, reason: 'limit', limit };
     }
 
-    const { data: existing } = await query.maybeSingle();
+    // Anonymous: enforce the same number the UI advertises, server-side.
+    const limit = getAnonymousLimit(persona);
+    if (limit <= 0) return { allowed: false, reason: 'limit', limit };
 
-    if (existing) {
-      const windowStart = new Date(existing.window_start);
+    const ipUsed = await readBucketCount(persona, { ip });
+    if (ipUsed >= limit) return { allowed: false, reason: 'limit', limit };
 
-      if (windowStart < dayAgo) {
-        // Reset the window
-        await supabase
-          .from('rate_limits')
-          .update({
-            message_count: 1,
-            window_start: now.toISOString(),
-            updated_at: now.toISOString()
-          })
-          .eq('id', existing.id);
-      } else {
-        // Increment count
-        await supabase
-          .from('rate_limits')
-          .update({
-            message_count: existing.message_count + 1,
-            updated_at: now.toISOString()
-          })
-          .eq('id', existing.id);
-      }
+    if (options.anonymousDeviceId) {
+      const deviceUsed = await readBucketCount(persona, { ip: `device:${options.anonymousDeviceId}` });
+      if (deviceUsed >= limit) return { allowed: false, reason: 'limit', limit };
+    }
+
+    return { allowed: true };
+  } catch (error) {
+    // Deliberately fail closed. This log line is the signal that the limiter
+    // backend is down — alert on it (production-check.md 2.1).
+    console.error('rate_limit_backend_error', error instanceof Error ? error.message : error);
+    return { allowed: false, reason: 'backend_error' };
+  }
+}
+
+/** Increment one bucket by `amount`, resetting the window if it has expired. */
+async function bumpBucket(
+  persona: string,
+  key: { userId: string } | { ip: string },
+  amount: number,
+): Promise<void> {
+  const now = new Date();
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+  let query = supabase.from('rate_limits').select('*').eq('persona', persona);
+  query = 'userId' in key ? query.eq('user_id', key.userId) : query.eq('ip_address', key.ip);
+
+  const { data: existing, error } = await query.maybeSingle();
+  if (error) throw new Error(`rate_limit_backend_error: ${error.message}`);
+
+  if (existing) {
+    const windowExpired = new Date(existing.window_start) < dayAgo;
+    await supabase
+      .from('rate_limits')
+      .update(
+        windowExpired
+          ? { message_count: amount, window_start: now.toISOString(), updated_at: now.toISOString() }
+          : {
+              // Never let a refund drive the counter below zero.
+              message_count: Math.max(0, (existing.message_count ?? 0) + amount),
+              updated_at: now.toISOString(),
+            },
+      )
+      .eq('id', existing.id);
+    return;
+  }
+
+  if (amount <= 0) return; // nothing to refund against
+
+  await supabase.from('rate_limits').insert({
+    user_id: 'userId' in key ? key.userId : null,
+    ip_address: 'userId' in key ? null : key.ip,
+    persona,
+    message_count: amount,
+    window_start: now.toISOString(),
+  });
+}
+
+/**
+ * Charge (or, with a negative amount, refund) quota for one generation.
+ *
+ * Call this only after a generation has actually succeeded. Charging up front
+ * means a failed request silently costs the user a message — the behaviour
+ * reported in production-check.md 0.4.
+ */
+export async function incrementRateLimit(
+  userId: string | null,
+  ip: string,
+  persona: string,
+  options: { amount?: number; anonymousDeviceId?: string | null; provider?: string } = {},
+): Promise<void> {
+  const amount = options.amount ?? 1;
+  try {
+    if (userId) {
+      await bumpBucket(persona, { userId }, amount);
     } else {
-      // Create new record
-      await supabase
-        .from('rate_limits')
-        .insert({
-          user_id: userId,
-          ip_address: userId ? null : ip,
-          persona,
-          message_count: 1,
-          window_start: now.toISOString()
-        });
+      await bumpBucket(persona, { ip }, amount);
+      if (options.anonymousDeviceId) {
+        await bumpBucket(persona, { ip: `device:${options.anonymousDeviceId}` }, amount);
+      }
+    }
+
+    if (options.provider) {
+      await bumpBucket(`${PROVIDER_BUCKET_PREFIX}${options.provider}`, { ip: GLOBAL_BUCKET_IP }, amount);
     }
   } catch (error) {
-    console.error('Rate limit increment error:', error);
+    console.error('rate_limit_increment_error', error instanceof Error ? error.message : error);
   }
 }
 
@@ -2011,6 +2177,37 @@ export function normalizeStreamingProvider(provider: string | undefined, fallbac
   return provider && STREAMING_PROVIDERS.has(provider) ? provider : fallback;
 }
 
+export interface PersonaProviderConfig {
+  provider?: string;
+  flowState?: { provider?: string };
+}
+
+/**
+ * The single source of truth for which upstream a run will hit.
+ *
+ * Both the spend-ceiling check (which happens before generation) and the
+ * dispatch itself read from here. They used to derive it separately with
+ * different fallbacks, so the ceiling could bill 'nvidia' for a run that
+ * actually went to Cerebras.
+ */
+export function resolveRunProvider(
+  persona: string,
+  personaConfig: PersonaProviderConfig,
+  flowState: boolean,
+): string {
+  if (persona === 'default') {
+    const flowConfig = personaConfig.flowState;
+    if (flowState && flowConfig) {
+      return normalizeStreamingProvider(flowConfig.provider || 'groq', 'cerebras');
+    }
+    return normalizeStreamingProvider(personaConfig.provider || 'cerebras', 'cerebras');
+  }
+  if (persona === 'pro') {
+    return normalizeStreamingProvider(personaConfig.provider || 'pollinations', 'pollinations');
+  }
+  return normalizeStreamingProvider(personaConfig.provider || 'groq', 'groq');
+}
+
 interface StreamingModelConfig {
   model: string;
   temperature?: number;
@@ -2046,13 +2243,35 @@ export async function dispatchStreamingProvider(
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // Handle CORS
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  applyCors(req, res, 'GET, POST, OPTIONS');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+
+  // A browser page on a disallowed origin gets nothing. Non-browser clients
+  // send no Origin at all and are handled by the auth check below.
+  if (!hasAcceptableOrigin(req)) {
+    return res.status(403).json({ error: 'Origin not allowed' });
+  }
+
+  // GET /api/ai-proxy?quota=<persona> — the authoritative remaining count for
+  // this caller, so the UI never has to guess (production-check.md 0.4).
+  if (req.method === 'GET') {
+    const quotaPersona = typeof req.query.quota === 'string' ? req.query.quota : '';
+    if (!quotaPersona || !(quotaPersona in AI_PERSONAS)) {
+      return res.status(400).json({ error: 'Unknown persona' });
+    }
+
+    const quotaUser = await getAuthenticatedRequestUser(req);
+    const quotaIpHeader = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket.remoteAddress || 'unknown';
+    const quotaIp = Array.isArray(quotaIpHeader) ? quotaIpHeader[0] : quotaIpHeader;
+    const quotaDeviceId = quotaUser ? null : resolveAnonymousDeviceId(req, res);
+
+    const quota = await getRemainingQuota(quotaUser?.id ?? null, quotaIp, quotaPersona, quotaDeviceId);
+    if (!quota) return res.status(503).json({ error: 'Service temporarily unavailable' });
+
+    return res.status(200).json({ ...quota, anonymous: !quotaUser });
   }
 
   if (req.method !== 'POST') {
@@ -2060,28 +2279,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { messages, persona = 'default', imageData, heatLevel = 2, stream = false, flowState = false, inputImageUrls, imageDimensions, userId, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText } = req.body;
+    // Identity comes from the verified JWT, never from the request body.
+    // `userId` is deliberately NOT destructured below — see production-check.md
+    // 0.1 and 0.2. A client-supplied id let anyone read another user's stored
+    // memories through the service-role Supabase client.
+    const authedUser = await getAuthenticatedRequestUser(req);
+    const userId = authedUser?.id ?? null;
+
+    // User-scoped Supabase client: RLS applies, so even a bug that passed the
+    // wrong id here cannot read another user's rows. Falls back to the
+    // service-role client only if the anon key is unset.
+    const accessToken = getRequestAccessToken(req);
+    const userClient = (userId && accessToken && createUserScopedClient(accessToken)) || supabase;
+
+    const { messages, persona = 'default', imageData, heatLevel = 2, stream = false, flowState = false, inputImageUrls, imageDimensions, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Invalid messages format' });
+    }
+
+    const personaConfig = AI_PERSONAS[persona as keyof typeof AI_PERSONAS];
+    if (!personaConfig) {
+      return res.status(400).json({ error: 'Invalid persona' });
     }
 
     // Get client IP for rate limiting
     const clientIP = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket.remoteAddress || 'unknown';
     const ip = Array.isArray(clientIP) ? clientIP[0] : clientIP;
 
-    // Check rate limit (using Supabase)
-    const withinLimit = await checkRateLimit(userId || null, ip, persona);
-    if (!withinLimit) {
-      return res.status(429).json({
-        error: 'Rate limit exceeded',
-        type: 'rateLimit'
+    // Anonymous visitors get a small trial, enforced here rather than in
+    // localStorage. Personas with a zero anonymous allowance need an account.
+    const anonymousDeviceId = userId ? null : resolveAnonymousDeviceId(req, res);
+    if (!userId && getAnonymousLimit(persona) <= 0) {
+      return res.status(401).json({
+        error: 'Sign in to use this persona',
+        type: 'authRequired'
       });
     }
 
-    const personaConfig = AI_PERSONAS[persona as keyof typeof AI_PERSONAS];
-    if (!personaConfig) {
-      return res.status(400).json({ error: 'Invalid persona' });
+    // Which upstream this run will bill. Special modes override the model but
+    // never the provider, so the persona config is the only source. Derived by
+    // the same function the dispatch uses, so the two cannot drift apart.
+    const provider = resolveRunProvider(persona, personaConfig as PersonaProviderConfig, !!flowState);
+
+    // Check rate limit (using Supabase). Fails closed.
+    const limitOutcome = await checkRateLimit(userId, ip, persona, { anonymousDeviceId, provider });
+    if (!limitOutcome.allowed) {
+      if (limitOutcome.reason === 'backend_error') {
+        return res.status(503).json({
+          error: 'Service temporarily unavailable',
+          type: 'rateLimitBackend'
+        });
+      }
+      if (limitOutcome.reason === 'spend_ceiling') {
+        return res.status(503).json({
+          error: 'Service temporarily unavailable',
+          type: 'spendCeiling'
+        });
+      }
+      return res.status(429).json({
+        error: 'Rate limit exceeded',
+        type: 'rateLimit',
+        ...(userId ? {} : { anonymous: true, limit: limitOutcome.limit })
+      });
     }
 
     // Resolve special mode per-persona config (if active)
@@ -2106,7 +2366,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Fetch user memories and add to system prompt if user is logged in
     let memoryContext = '';
     if (userId) {
-      const memories = await fetchUserMemories(userId, persona);
+      // Defence in depth: the id already comes from the verified token, but a
+      // future refactor that reintroduces a body field must fail loudly here.
+      assertOwnUserId(userId, authedUser?.id ?? null);
+      const memories = await fetchUserMemories(userId, persona, userClient);
       // userMemories from request contains profile info (nickname, about_me)
       const userProfile = userMemories as { nickname?: string; about_me?: string } | undefined;
       memoryContext = formatMemoriesForContext(memories, userProfile);
@@ -2183,19 +2446,12 @@ ${thinkingDirective}`;
     {
       // Build apiMessages the same way for all cases (text-only messages)
       // If images are present, the OCR pipeline will inject extracted text before the API call
-      const externalAIs = ['chatgpt', 'gemini', 'claude', 'deepseek', 'grok'];
-      const isExternalAI = externalAIs.includes(persona);
-
-      if (isExternalAI) {
-        // No system prompt for external AIs
-        apiMessages = toApiMessages(processedMessages);
-      } else {
-        // TimeMachine personas use system prompts
-        apiMessages = [
-          { role: 'system', content: systemPromptToUse },
-          ...toApiMessages(processedMessages)
-        ];
-      }
+      // Every persona is a TimeMachine persona now and carries a system prompt.
+      // The third-party-branded personas were removed — see production-check.md 0.9.
+      apiMessages = [
+        { role: 'system', content: systemPromptToUse },
+        ...toApiMessages(processedMessages)
+      ];
     }
 
     // Document text injection: enrich the last user message with the file content
@@ -2269,36 +2525,21 @@ ${thinkingDirective}`;
 
       // ─── Resolve which provider and model this run uses ───────────────
       // Each persona keeps its own historical fallback provider.
-      const externalAIs = ['chatgpt', 'gemini', 'claude', 'deepseek', 'grok'];
-      const isExternalAI = externalAIs.includes(persona);
-
-      let runProvider: string;
+      // Same derivation the spend ceiling used above.
+      const runProvider = provider;
       let runModel: string = modelToUse;
       let runTemperature: number | undefined = temperatureToUse;
       let runMaxTokens: number | undefined = maxTokensToUse;
-      let runTools: any[] = toolsToUse;
+      const runTools = toolsToUse;
 
-      if (isExternalAI) {
-        // External AI models proxy through Pollinations and get no tools.
-        runProvider = 'pollinations';
-        runModel = personaConfig.model;
-        runTemperature = undefined;
-        runMaxTokens = undefined;
-        runTools = [];
-      } else if (persona === 'default') {
-        const flowConfig = (personaConfig as any).flowState;
-        if (flowState && flowConfig) {
-          runProvider = normalizeStreamingProvider(flowConfig.provider || 'groq', 'cerebras');
-          runModel = flowConfig.model;
-          runTemperature = flowConfig.temperature;
-          runMaxTokens = flowConfig.maxTokens;
-        } else {
-          runProvider = normalizeStreamingProvider((personaConfig as any).provider || 'cerebras', 'cerebras');
-        }
-      } else if (persona === 'pro') {
-        runProvider = normalizeStreamingProvider((personaConfig as any).provider || 'pollinations', 'pollinations');
-      } else {
-        runProvider = normalizeStreamingProvider((personaConfig as any).provider || 'groq', 'groq');
+      // Flow State swaps the model alongside the provider.
+      const flowConfig = (personaConfig as PersonaProviderConfig & {
+        flowState?: { model?: string; temperature?: number; maxTokens?: number };
+      }).flowState;
+      if (persona === 'default' && flowState && flowConfig) {
+        runModel = flowConfig.model ?? runModel;
+        runTemperature = flowConfig.temperature;
+        runMaxTokens = flowConfig.maxTokens;
       }
 
       try {
@@ -2339,16 +2580,18 @@ ${thinkingDirective}`;
           fullContent += warning;
         }
 
-        // Increment rate limit after successful response (async, don't await)
-        // Flow State consumes 3 quota instead of 1
+        // Charge quota only now that the generation has actually succeeded.
+        // Flow State consumes 3 quota instead of 1.
         const quotaCost = (flowState && persona === 'default') ? 3 : 1;
-        for (let i = 0; i < quotaCost; i++) {
-          incrementRateLimit(userId || null, ip, persona);
-        }
+        await incrementRateLimit(userId, ip, persona, {
+          amount: quotaCost,
+          anonymousDeviceId,
+          provider,
+        });
 
         // Process memory tags from the full content (XML-based memory system)
         if (userId && fullContent) {
-          const memoryResult = await processMemoryTags(fullContent, userId, persona);
+          const memoryResult = await processMemoryTags(fullContent, userId, persona, userClient);
           if (memoryResult.hasSavedMemory) {
             // Send a special marker that the frontend can detect
             res.write('\n\n[MEMORY_SAVED]');
@@ -2394,14 +2637,7 @@ ${thinkingDirective}`;
       }
 
       // Choose API based on persona
-      const externalAIs = ['chatgpt', 'gemini', 'claude', 'deepseek', 'grok'];
-      if (externalAIs.includes(persona)) {
-        // External AI models use Pollinations API
-        apiResponse = await callPollinationsAPI(
-          apiMessages,
-          personaConfig.model
-        );
-      } else if (persona === 'default') {
+      if (persona === 'default') {
         // Air persona — check Flow State first, then configured provider
         const flowConfig = (personaConfig as any).flowState;
         if (flowState && flowConfig) {
@@ -2738,14 +2974,15 @@ ${thinkingDirective}`;
           }
         }
 
-        // Finalize rate limits & memories
-        const quotaCost = 1;
-        for (let i = 0; i < quotaCost; i++) {
-          incrementRateLimit(userId || null, ip, persona);
-        }
+        // Finalize rate limits & memories — charged only on success.
+        await incrementRateLimit(userId, ip, persona, {
+          amount: 1,
+          anonymousDeviceId,
+          provider,
+        });
 
         if (userId && finalContent) {
-          const memoryResult = await processMemoryTags(finalContent, userId, persona);
+          const memoryResult = await processMemoryTags(finalContent, userId, persona, userClient);
           if (memoryResult.hasSavedMemory) {
             finalContent = memoryResult.content + '\n\n[MEMORY_SAVED]';
           }
@@ -2757,7 +2994,7 @@ ${thinkingDirective}`;
           thinking: result.thinking
         });
       } else {
-        const provider = (personaConfig as any).provider || 'groq';
+        // Same derivation as the ceiling check and the streaming path.
         if (provider === 'secretstoai' || provider === 'secrectstoai') {
           apiResponse = await callSecretsToAIAPI(
             apiMessages,
@@ -2863,19 +3100,21 @@ ${thinkingDirective}`;
 
       // Process memory tags from the full content (XML-based memory system)
       if (userId && fullContent) {
-        const memoryResult = await processMemoryTags(fullContent, userId, persona);
+        const memoryResult = await processMemoryTags(fullContent, userId, persona, userClient);
         if (memoryResult.hasSavedMemory) {
           // Replace memory tags with marker and clean content
           fullContent = memoryResult.content + '\n\n[MEMORY_SAVED]';
         }
       }
 
-      // Increment rate limit after successful response (async, don't await)
-      // Flow State consumes 3 quota instead of 1
+      // Charge quota only now that the generation has actually succeeded.
+      // Flow State consumes 3 quota instead of 1.
       const quotaCost = (flowState && persona === 'default') ? 3 : 1;
-      for (let i = 0; i < quotaCost; i++) {
-        incrementRateLimit(userId || null, ip, persona);
-      }
+      await incrementRateLimit(userId, ip, persona, {
+        amount: quotaCost,
+        anonymousDeviceId,
+        provider,
+      });
 
       // Extract reasoning content for all personas
       const result = extractReasoningAndContent(fullContent);

@@ -14,6 +14,14 @@ export default defineConfig(({ mode }) => {
     );
   }
 
+  // Vite's loadEnv() does NOT populate process.env. The dev-only serverless
+  // middleware below executes api/*.ts handlers in-process, and those handlers
+  // read secrets from process.env (as they do on Vercel). Without this bridge
+  // every /api/* route crashes locally with "supabaseKey is required".
+  for (const [key, value] of Object.entries(env)) {
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+
   return {
     plugins: [
       react(),

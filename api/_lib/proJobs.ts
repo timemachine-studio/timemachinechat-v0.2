@@ -3,7 +3,12 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 // Shared store for TimeMachine PRO background generation jobs.
 // Used by the Vercel API routes and by the Trigger.dev task.
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://etpehiyzlkhknzceizar.supabase.co';
+const supabaseUrl = process.env.VITE_SUPABASE_URL;
+if (!supabaseUrl) {
+  // Fail fast rather than falling back to a hardcoded project URL: a stale
+  // fallback silently points production at the wrong database.
+  throw new Error('VITE_SUPABASE_URL is not set.');
+}
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
 
 let cachedClient: SupabaseClient | null = null;

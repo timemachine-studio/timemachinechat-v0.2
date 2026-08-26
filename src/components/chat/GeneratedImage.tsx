@@ -15,10 +15,6 @@ interface GeneratedImageProps {
 const PERSONA_SHIMMER_COLORS: Record<string, { baseColor: string; shimmerColor: string }> = {
   girlie: { baseColor: '#ec4899', shimmerColor: '#ffffff' },
   pro: { baseColor: '#06b6d4', shimmerColor: '#ffffff' },
-  chatgpt: { baseColor: '#22c55e', shimmerColor: '#ffffff' },
-  gemini: { baseColor: '#3b82f6', shimmerColor: '#ffffff' },
-  claude: { baseColor: '#f97316', shimmerColor: '#ffffff' },
-  grok: { baseColor: '#9ca3af', shimmerColor: '#ffffff' },
   default: { baseColor: '#a855f7', shimmerColor: '#ffffff' },
 };
 
