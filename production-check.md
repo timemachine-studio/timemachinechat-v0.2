@@ -18,10 +18,11 @@ These are not code. They block launch and none of them can be handed to an agent
 | # | What | When | Status |
 |---|---|---|---|
 | 0.4a | **Run `supabase/migrations/rate_limits_rls.sql`** in the Supabase SQL editor. Until then `rate_limits` is still readable with the public anon key. **After applying, `SUPABASE_SERVICE_ROLE_KEY` becomes mandatory in every environment incl. local dev** — without it every request 503s. | **Now.** Last thing standing between here and Gate 0 green. | ⬜ |
-| 0.7a | **Rotate every provider key** that has ever sat in a local `.env` (NVIDIA, Groq, Cerebras, Pollinations, Eaon, SecretsToAI, Supabase service role). | Before the repo is public or the domain is live. | ⬜ |
-| 0.7b | **Enable GitHub secret scanning + push protection** on the repo. | Before the next push, ideally. | ⬜ |
+| 0.7a | **Rotate every provider key** that has ever sat in a local `.env` (NVIDIA, Groq, Cerebras, Pollinations, Eaon, SecretsToAI, Supabase service role). **Downgraded from urgent:** a full 69-commit history scan on 2026-08-26 found no `.env`, no provider key, no `service_role` JWT and no committed `dist/`. Nothing has leaked through git — this is now hygiene, not incident response. | Before public launch. Not an emergency. | ⬜ |
+| 0.7b | ~~Enable GitHub secret scanning + push protection~~ | — | ✅ **Done 2026-08-26.** Secret scanning, push protection, Dependabot alerts and Dependabot security updates are all enabled on `timemachine-studio/timemachinechat-v0.2`. (Non-provider patterns and validity checks need GitHub Advanced Security and stayed off.) |
 | 0.8a | **Have counsel review `/privacy` and `/terms`.** They are drafted in good faith but are not legal advice. | Before public launch. Start early — external turnaround. | ⬜ |
-| 0.9a | **Review the "Girlie" persona and PRO heat levels 1–5** against each upstream provider's usage policy. Heat level 5 is the kind of thing that gets an API key revoked. | Before public launch. | ⬜ |
+| 0.9a | **Decide on the remaining PRO Heat 5 content.** The review is done (see 0.9a below) and the two unambiguous violations are fixed. What is left is a product decision, not a compliance one. | Before public launch. | 🟡 |
+| 0.9b | **Decide whether to purge the removed slur from git history.** It is gone from the working tree, but the repo is **public** and the string remains in older commits of `api/ai-proxy.ts`. Purging means `git filter-repo` + a force-push that rewrites every commit hash — destructive, breaks anyone's clone, and not something to do unilaterally. The alternative is to accept it as history. | Your call. Sooner is better if the repo stays public. | ⬜ |
 | 4.4a | **Set `PROVIDER_DAILY_CEILING`** to a real number in Vercel. The mechanism ships; the value is still `0` (disabled). | Before the domain is public. | ⬜ |
 | — | **Set `ALLOWED_ORIGINS` and `ANON_TRIAL_SECRET`** in Vercel. Unset `ALLOWED_ORIGINS` warns and falls back to same-origin only; unset `ANON_TRIAL_SECRET` weakens the anonymous trial to IP-only. | At deploy time. | ⬜ |
 
@@ -98,10 +99,10 @@ Do the reliability thread first; it is what the reported failures actually are.
 | Metric | At audit | Now | Target |
 |---|---|---|---|
 | `npx tsc --noEmit` | 176 errors | **155** | 0 (1.1) |
-| `npm run lint` | 305 problems | **299** | trending down |
+| `npm run lint` | 305 problems | **283** | trending down |
 | `npm test` | no runner | **10 passing** | real coverage (2.4) |
-| `npm audit` (production deps) | 2 critical, 34 high | **0 at any severity** | hold at 0 |
-| `npm audit` (all deps) | 64 total | **4** — all via `@vercel/node`'s bundled `undici@5.x`, a devDependency | monitor |
+| `npm audit` (production deps) | 2 critical, 34 high | **0 at any severity** (clean install, 2026-08-27) | hold at 0 |
+| `npm audit` (all deps) | 64 total | **6** — all dev-only, via `@vercel/node`'s `undici@5.x` and trigger.dev's tooling | monitor |
 
 **Realistic remaining timeline:** Gate 1 + Gate LS is the bulk of a responsible soft launch — roughly 3–4 weeks from here. Gates 2–4 can overlap.
 
@@ -442,7 +443,27 @@ Also review the **"Girlie" persona** and the **PRO heat levels 1–5** against e
 **Done when** a lawyer-safe decision is recorded in this repo and the UI, manifest, and meta tags match it.
 
 
-> **Done 2026-08-26. Decision: remove the feature entirely** (owner's call, 2026-08-26 — "Remove them. We will not ship that feature. Only our models"). The `chatgpt`/`gemini`/`claude`/`deepseek`/`grok` personas are deleted from `api/ai-proxy.ts` and `src/config/constants.ts`, along with their prompts (which instructed the model to claim it *was* that company's product), the `@mention` routing, the personas-page section, and the marks in `manifest.json`, `index.html` meta + structured data, `og-image.svg`, and the About/Features/Help copy. Only TimeMachine Air, Girlie and PRO remain. *(The "Girlie" persona and PRO heat levels 1–5 were not reviewed against provider usage policies — still open.)*
+> **Done 2026-08-26. Decision: remove the feature entirely** (owner's call, 2026-08-26 — "Remove them. We will not ship that feature. Only our models"). The `chatgpt`/`gemini`/`claude`/`deepseek`/`grok` personas are deleted from `api/ai-proxy.ts` and `src/config/constants.ts`, along with their prompts (which instructed the model to claim it *was* that company's product), the `@mention` routing, the personas-page section, and the marks in `manifest.json`, `index.html` meta + structured data, `og-image.svg`, and the About/Features/Help copy. Only TimeMachine Air, Girlie and PRO remain. *(Usage-policy review now done — see 0.9a below.)*
+
+
+#### 0.9a — Usage-policy review of the Girlie persona and PRO heat levels ✅ *(reviewed 2026-08-26)*
+
+**What the policies say.** [NVIDIA](https://www.nvidia.com/en-us/networking/policy/terms/) — the default provider for all three personas — prohibits content that is *"hateful, discriminatory, or pornographic, or that advocates violence."* [Groq's Acceptable Use & Responsible AI Policy](https://console.groq.com/docs/legal/ai-policy) prohibits *"child sexual abuse or exploitation, violence, violent extremism or terrorism, hate speech, harassment, or non-consensual intimate imagery or sexually explicit content that is illegal."* Cerebras and Pollinations carry equivalent terms. These bind **you**, not the end user — a violation is your key that gets revoked.
+
+**Findings, by severity.**
+
+| | Finding | Verdict |
+|---|---|---|
+| 🔴 | **Heat 5 listed a racial slur as vocabulary the model should use.** The prompt carried an explicit list of swears for the model to draw on, and that list included a racial slur (redacted here — see the diff on the fix commit), two Hindi/Bengali slurs, and two gendered sexual slurs. This is a direct instruction to emit hate speech, in a **public** repository, on a provider that explicitly prohibits "hateful, discriminatory" output. Not borderline. | ✅ **Fixed.** All five removed from the list. The ordinary profanity and the persona's voice are untouched — the change is surgical, not a rewrite. |
+| 🔴 | **The example for handling a stated intent to commit sexual violence was a joke.** The prompt modelled responding to *"you wanna rape your crush?"* by mocking the user. That teaches the model to play along with, rather than refuse, the single most serious category of request it can receive. | ✅ **Fixed.** Replaced with an in-voice hard refusal, plus an explicit "never use racial, ethnic, religious or anti-LGBTQ slurs" instruction covering the case where a *user* asks for them. |
+| 🟡 | **Heat 5 permits NSFW content on request** (*"NSFW content's on the table if explicitly requested"*), and the PRO image directive says *"allow unhinged and NSFW requests."* Groq bans sexually explicit content only where *illegal*; NVIDIA bans "pornographic" outright, with no exception. PRO routes to NVIDIA by default. | ⬜ **Your call.** As written this is out of policy for NVIDIA. Options: drop NSFW from PRO, or route Heat 5 to a provider whose terms allow it, or gate it behind age verification. |
+| 🟡 | **Heat 5's persona is "villain" framing with heavy profanity.** Profanity alone is not a policy violation anywhere reviewed. The framing is a brand risk, not a compliance one. | ⬜ **Your call.** No action needed for provider compliance. |
+| 🟢 | **The "Girlie" persona** was scanned for the same categories — no slurs, no NSFW directives, no violent content. It is a tone persona, nothing more. | ✅ **No issue found.** |
+| 🟢 | **Heat levels 1–4** contain no slurs and no NSFW directives. Heat 4 is attitude only. | ✅ **No issue found.** |
+
+**One structural point.** These prompts are the *only* content control in the product — there is no moderation layer on input or output. NVIDIA publishes [Llama 3.1 NemoGuard](https://docs.api.nvidia.com/nim/reference/nvidia-llama-3_1-nemoguard-8b-content-safety) for exactly this, and NeMo Guardrails is free. A prompt is a request, not an enforcement mechanism: a jailbroken Heat 5 will say whatever it is pushed into saying, and the resulting API call is attributable to your key. Task **4.2** covers this; treat it as the real fix and these prompt edits as necessary hygiene.
+
+**Done when** the 🟡 rows above have a recorded decision and 4.2 has a moderation layer.
 
 ---
 
@@ -1408,6 +1429,23 @@ Raised at the end of the Gate 0 pass, fixed immediately after.
 | `api/skills.ts` ChatGPT reference | Reworded to "AI writing tools" — keeps the guidance, drops the mark. |
 
 **Known consequence:** applying the `rate_limits` migration requires `SUPABASE_SERVICE_ROLE_KEY` to be set in every environment that runs the API, including local dev.
+
+### Gate 0 regression and fix — 2026-08-27
+
+**The 0.10 dependency work broke the Vercel build.** `npm install` on Vercel failed with `ERESOLVE` on `@types/react`. Root cause: Vercel ran plain `npm install`, which re-resolved the tree from the `package.json` ranges instead of installing the lockfile, and landed on a combination that was never tested locally. The local tree was also drifted — a clean reinstall surfaced a **production** advisory that the drifted `node_modules` had hidden.
+
+| Fix | Detail |
+|---|---|
+| `vercel.json` → `"installCommand": "npm ci"` | `npm ci` installs strictly from `package-lock.json` and fails loudly if the lock and `package.json` disagree. Plain `npm install` silently re-resolves, which is how an untested tree reached the build. |
+| `package.json` → `"engines": { "node": "22.x" }` | Pins the build runtime so npm's resolver behaviour cannot drift between local and Vercel. |
+| `pdfjs-dist` `^5.4.296` → `^6.2.108` | The range was resolving to `5.7.284`, inside the advisory window for *PDF.js: arbitrary JavaScript execution upon opening a malicious PDF* (`>=5.6.83 <6.2.108`). **This is production-reachable — the app parses user-uploaded PDFs in the browser.** Verified after upgrading: `extractPdfText()` returns the correct text from a real PDF on pdfjs `6.2.108`. |
+| Lockfile regenerated | From a clean `rm -rf node_modules && rm package-lock.json && npm install`, so what is committed is what a fresh install produces. |
+
+**Verified against a clean-room copy of only the tracked files:** `npm ci` installs and `npm run build` succeeds — the same two commands Vercel runs.
+
+**Correction to the numbers reported on 2026-08-26.** The "0 production advisories" claim was measured against a drifted `node_modules`. On a clean install it was **1 high** (`pdfjs-dist`). It is genuinely 0 now, and the counts below are from a clean tree.
+
+**Lesson worth keeping:** after any dependency change, run `rm -rf node_modules && npm ci` before trusting an audit or a build. An incrementally-updated `node_modules` is not what CI installs.
 
 ---
 
