@@ -5,6 +5,108 @@
 
 ---
 
+## ✅ Remaining work — the running tracker
+
+**Last updated:** 2026-08-26 · **Gate 0:** code complete, pending one manual step.
+
+Keep this table current. When a task closes, strike it here *and* mark its section below.
+
+### Owner-only — nobody else can do these
+
+These are not code. They block launch and none of them can be handed to an agent.
+
+| # | What | When | Status |
+|---|---|---|---|
+| 0.4a | **Run `supabase/migrations/rate_limits_rls.sql`** in the Supabase SQL editor. Until then `rate_limits` is still readable with the public anon key. **After applying, `SUPABASE_SERVICE_ROLE_KEY` becomes mandatory in every environment incl. local dev** — without it every request 503s. | **Now.** Last thing standing between here and Gate 0 green. | ⬜ |
+| 0.7a | **Rotate every provider key** that has ever sat in a local `.env` (NVIDIA, Groq, Cerebras, Pollinations, Eaon, SecretsToAI, Supabase service role). | Before the repo is public or the domain is live. | ⬜ |
+| 0.7b | **Enable GitHub secret scanning + push protection** on the repo. | Before the next push, ideally. | ⬜ |
+| 0.8a | **Have counsel review `/privacy` and `/terms`.** They are drafted in good faith but are not legal advice. | Before public launch. Start early — external turnaround. | ⬜ |
+| 0.9a | **Review the "Girlie" persona and PRO heat levels 1–5** against each upstream provider's usage policy. Heat level 5 is the kind of thing that gets an API key revoked. | Before public launch. | ⬜ |
+| 4.4a | **Set `PROVIDER_DAILY_CEILING`** to a real number in Vercel. The mechanism ships; the value is still `0` (disabled). | Before the domain is public. | ⬜ |
+| — | **Set `ALLOWED_ORIGINS` and `ANON_TRIAL_SECRET`** in Vercel. Unset `ALLOWED_ORIGINS` warns and falls back to same-origin only; unset `ANON_TRIAL_SECRET` weakens the anonymous trial to IP-only. | At deploy time. | ⬜ |
+
+### ⚠ Standing launch blocker
+
+> The signup form says **"Your chats are stored safely in your device only."** That is **false today** — signed-in chats go to Supabase (`chatService.ts:334`). Added 2026-08-26 at the owner's direction on the basis that Gate LS will make it true first.
+>
+> **Either LS.2 + LS.3 ship before the app goes public, or that line comes out.** It is also currently contradicted by the Privacy Policy on the same form. Marked with a `⚠ LAUNCH BLOCKER` comment in `src/components/auth/AuthModal.tsx`. See LS.3.
+
+### Gate 1 — Correctness and stability
+
+Do the reliability thread first; it is what the reported failures actually are.
+
+| # | Task | Effort | When |
+|---|---|---|---|
+| **1.12** | Replace `Date.now()` message IDs | S | **First.** 1.10 identifies turns by id — do this or Retry inherits the collision bug. |
+| **1.9** | Never let the stream silently succeed | M | **Second.** Root cause of "it just glitched". Reproduced live again on 2026-08-26. |
+| **1.10** | Retry button: rewind and re-run | M | **Third.** Needs 1.9 to know a stream failed. |
+| 1.14 | Render the app shell immediately | M | Next — fixes the long spinner you reported. |
+| 1.11 | Timeout, backoff, queue | M | Next — the 9× latency spread under load. |
+| 1.13 | Fix stale closures in `useChat` | M | Next — completions save into the wrong session. |
+| 1.2 → 1.1 | Regenerate DB types, then fix the 155 TS errors | S → L | After the thread above. 1.2 first; it clears many errors for free. |
+| 1.3 | Error boundary | S | Any time. Cheap, high value — one render error blanks the app. |
+| 1.4 | 404 route | S | Any time. Cheap. |
+| 1.5 | Abort, timeout, retry on AI requests | M | Dovetails with 1.9/1.10. |
+| 1.6 | Quota accounting and message ordering | S | After 1.12. |
+| 1.7 | Real error taxonomy | M | Dovetails with 1.10. |
+| 1.8 | Validate and bound API input with zod | M | Before public traffic. |
+
+### Gate LS — Local-first message storage
+
+| # | Task | Effort | When |
+|---|---|---|---|
+| **LS.1** | One honest privacy claim | S | **Decide first.** Everything else in this gate follows from it — and the signup line above already depends on it. |
+| **LS.2** | Move local storage to IndexedDB | M | Before LS.3. Never remove the cloud path while the local store still dies at 5 MB. |
+| **LS.3** | Remove the cloud sync path | M | After LS.2. **Gates the signup claim.** |
+| LS.4 | Migrate existing users off the cloud | M | After LS.3 works, before dropping tables. |
+| LS.5 | Decide what local-only means for group chat / multi-device | S + M | With LS.1 — it is a scope decision. |
+| LS.6 | Export, import, delete | M | With or after LS.3. |
+
+### Gate 2 — Production infrastructure
+
+| # | Task | Effort | When |
+|---|---|---|---|
+| 2.2 | Get the DB schema into the repo | L | **First in this gate** — unblocks staging and 1.2. |
+| 2.1 | Error tracking and uptime monitoring | M | Before public traffic. You currently find out about outages from users. |
+| 2.3 | CI pipeline | M | Once 1.1 is close enough that a typecheck gate can pass. |
+| 2.4 | Broaden the test suite | L | After behaviour stops moving. One suite exists today (`renderInline`). |
+| 2.5 | Security headers | M | Before public launch. |
+| 2.6 | Staging environment and deploy discipline | M | Before the first real release. |
+
+### Gate 3 — Performance and polish
+
+| # | Task | Effort | When |
+|---|---|---|---|
+| 3.2 | Fix the CSS import order | S | Any time — it warns on every dev boot today. |
+| 3.1 | Code-split the bundle | M | Before launch. Main chunk is ~2.1 MB. |
+| 3.3 | Accessibility pass | M | Before launch. |
+| 3.4 | Mobile layout issues | M | Before launch. |
+| 3.5 | Repository hygiene | S | Any time. |
+
+### Gate 4 — Launch readiness
+
+| # | Task | Effort | When |
+|---|---|---|---|
+| 4.2 | Content safety and disclaimers | M | **Start early** — external input, long lead time. Pairs with 0.9a. |
+| 4.1 | Fix launch-facing assets | S | Before launch. |
+| 4.3 | Reduce the Pollinations dependency | M | Before launch. |
+| 4.4 | Load test and set the spend ceiling | M | Last, against the real thing. See 4.4a above. |
+| 4.5 | Launch-day runbook | S | Last. Someone other than you must be able to execute it. |
+
+### Where the numbers stand
+
+| Metric | At audit | Now | Target |
+|---|---|---|---|
+| `npx tsc --noEmit` | 176 errors | **155** | 0 (1.1) |
+| `npm run lint` | 305 problems | **299** | trending down |
+| `npm test` | no runner | **10 passing** | real coverage (2.4) |
+| `npm audit` (production deps) | 2 critical, 34 high | **0 at any severity** | hold at 0 |
+| `npm audit` (all deps) | 64 total | **4** — all via `@vercel/node`'s bundled `undici@5.x`, a devDependency | monitor |
+
+**Realistic remaining timeline:** Gate 1 + Gate LS is the bulk of a responsible soft launch — roughly 3–4 weeks from here. Gates 2–4 can overlap.
+
+---
+
 ## How to use this document
 
 Every item below is a numbered task with a fixed shape:
@@ -64,12 +166,9 @@ Nothing ships until every task here is green.
 
 > **Status: all 11 tasks green as of 2026-08-26.** 0.1–0.10 implemented and verified in this pass; 0.11 was already done.
 >
-> Three things inside these tasks are **not** code and remain open for you:
-> - **0.7** — rotate every provider key that has ever sat in a local `.env`, and turn on GitHub secret scanning + push protection.
-> - **0.8** — have counsel review `/privacy` and `/terms`, and revise them after **LS.1** (they describe today's cloud storage of chats).
-> - **0.9** — the "Girlie" persona and PRO heat levels 1–5 still need a read against each provider's usage policy.
+> **Gate 0 is not fully green until `supabase/migrations/rate_limits_rls.sql` is applied by hand** — see 0.4a in the tracker at the top of this document. The remaining owner-only items (key rotation, counsel review, usage-policy review) are tracked there too.
 >
-> One Done-when bullet could not be verified here: **0.1's "signed-in chat still works in the browser."** Verifying it needs a real account login, which this pass did not perform. Anonymous chat, the token-rejection path, and the memory/RLS wiring were all verified; sign in once before launch and send a message.
+> **Every Done-when bullet is verified, including signed-in chat.** Confirmed on 2026-08-26 against a real signed-in session: a chat turn streamed end to end, the quota probe returned `{anonymous: false, limit: 50, remaining: 49}` (identity derived from the verified JWT, one message charged), and the reply used the caller's own stored profile — which exercises the RLS-scoped memory read from 0.2 for a real user.
 
 ---
 
