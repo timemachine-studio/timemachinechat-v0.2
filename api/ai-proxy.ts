@@ -47,10 +47,10 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
-    provider: 'nvidia', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon'
-    model: 'minimaxai/minimax-m3',
+    provider: 'groq', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon'
+    model: 'qwen/qwen3.8-27b',
     temperature: 0.8,
-    maxTokens: 26304,
+    maxTokens: 6304,
     flowState: {
       provider: 'pollinations',
       model: 'nemotron-3.5-lightning',
