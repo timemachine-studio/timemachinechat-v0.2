@@ -48,7 +48,7 @@ export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'nvidia', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon'
-    model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning',
+    model: 'minimaxai/minimax-m3',
     temperature: 0.8,
     maxTokens: 26304,
     flowState: {
