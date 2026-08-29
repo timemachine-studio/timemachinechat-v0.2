@@ -48,7 +48,7 @@ export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'nvidia', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-    model: 'minimaxai/minimax-m3',
+    model: 'google/diffusiongemma-26b-a4b-it',
     temperature: 0.8,
     maxTokens: 26304,
     flowState: {
