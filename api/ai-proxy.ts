@@ -48,7 +48,7 @@ export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'eaon', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-    model: 'minimax-m3',
+    model: 'kimi-k2-thinking-extended',
     temperature: 0.8,
     maxTokens: 26304,
     flowState: {
