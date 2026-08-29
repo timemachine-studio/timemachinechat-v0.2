@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { Routes, Route, useNavigate, useLocation, useParams, useSearchParams, Navigate } from 'react-router-dom';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import { ChatInput } from './components/chat/ChatInput';
 import { BrandLogo, BrandOverride } from './components/brand/BrandLogo';
 import { MusicPlayer } from './components/music/MusicPlayer';
@@ -12,6 +12,8 @@ import { Star, Users, Settings, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useChat } from './hooks/useChat';
 import { useAnonymousRateLimit } from './hooks/useAnonymousRateLimit';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { NotFoundPage } from './components/NotFoundPage';
 import { AboutUsToast, AboutPage } from './components/about';
 import { ContactPage } from './components/contact';
 import { ThemeProvider, useTheme } from './context/ThemeContext';
@@ -126,10 +128,9 @@ interface MainChatPageProps {
 
 function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackgroundClass }: MainChatPageProps = {}) {
   const { theme } = useTheme();
-  const { user, profile, loading: authLoading, needsOnboarding, updateLastPersona } = useAuth();
+  const { user, profile, loading: authLoading, profileLoading, needsOnboarding, updateLastPersona } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [searchParams, setSearchParams] = useSearchParams();
 
   // Check if we're loading a session from history BEFORE useChat initialization
   // This prevents the init effect from overwriting loaded messages
@@ -147,21 +148,21 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
   const isGroupMode = !!groupChatId;
 
   // Group chat state
-  const [groupChat, setGroupChat] = useState<GroupChat | null>(null);
+  const [, setGroupChat] = useState<GroupChat | null>(null);
   const [isGroupChatLoading, setIsGroupChatLoading] = useState(false);
   const [isGroupParticipant, setIsGroupParticipant] = useState(false);
   const [isJoiningGroup, setIsJoiningGroup] = useState(false);
   const [groupInviteInfo, setGroupInviteInfo] = useState<{ owner_nickname: string; chat_name: string; participant_count: number; persona: string } | null>(null);
 
   // Reply state for group chat
-  const [replyTo, setReplyTo] = useState<{ id: number; content: string; sender_nickname?: string; isAI: boolean } | null>(null);
+  const [replyTo, setReplyTo] = useState<{ id: string; content: string; sender_nickname?: string; isAI: boolean } | null>(null);
 
   // Get initial persona from profile (validated against AI_PERSONAS)
   // If loading from history, use the session's persona instead
   const savedPersona = profile?.last_persona as keyof typeof AI_PERSONAS | null;
   const initialPersona = sessionToLoad
     ? sessionToLoad.persona
-    : (!authLoading && savedPersona && savedPersona in AI_PERSONAS ? savedPersona : undefined);
+    : (!profileLoading && savedPersona && savedPersona in AI_PERSONAS ? savedPersona : undefined);
 
   const [flowStateActive, setFlowStateActive] = useState(false);
   const [isSesameOpen, setIsSesameOpen] = useState(false);
@@ -186,6 +187,8 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     participants,
     // Actions
     handleSendMessage,
+    retryMessage,
+    stopGeneration,
     handlePersonaChange: handlePersonaChangeInternal,
     setCurrentProHeatLevel,
     startNewChat,
@@ -207,7 +210,9 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     user?.id,
     profile || undefined,
     initialPersona,
-    authLoading,
+    // The saved persona lives on the profile, so chat state waits for that —
+    // not for the session, and not for anything the shell renders.
+    authLoading || profileLoading,
     // Pass session to load directly so it's available immediately on mount
     sessionToLoad ? {
       messages: sessionToLoad.messages.filter(msg => msg.content && msg.content.trim() !== ''),
@@ -252,7 +257,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
       } else {
         setLyricsError("No tracks found.");
       }
-    } catch (err) {
+    } catch {
       setLyricsError("Failed to search. Please try again.");
     } finally {
       setLyricsIsLoading(false);
@@ -323,23 +328,25 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
   // Group chat loading and subscription
   useEffect(() => {
     if (!isGroupMode || !groupChatId) return;
+    // Narrowed once, here: the async closure below does not inherit the guard.
+    const chatId = groupChatId;
 
     async function loadGroupChat() {
       setIsGroupChatLoading(true);
 
       // Get invite info first
-      const invite = await getGroupChatInvite(groupChatId);
+      const invite = await getGroupChatInvite(chatId);
       if (invite) {
         setGroupInviteInfo(invite);
       }
 
       // Check if user is a participant
       if (user) {
-        const participant = await isGroupChatParticipant(groupChatId, user.id);
+        const participant = await isGroupChatParticipant(chatId, user.id);
         setIsGroupParticipant(participant);
 
         if (participant) {
-          const chat = await getGroupChat(groupChatId);
+          const chat = await getGroupChat(chatId);
           setGroupChat(chat);
         }
       }
@@ -362,7 +369,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
       groupChatId,
       user.id,
       profile.nickname || 'User',
-      profile.avatar_url
+      profile.avatar_url || undefined
     );
 
     if (success) {
@@ -479,7 +486,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
   }, [currentPersona, isAnonymous, isRateLimited, handleSendMessage, replyTo, handleLyricsPlay, setIsLyricsMaximized]);
 
   // Reply handlers for group chat
-  const handleReply = useCallback((message: { id: number; content: string; sender_nickname?: string; isAI: boolean }) => {
+  const handleReply = useCallback((message: { id: string; content: string; sender_nickname?: string; isAI: boolean }) => {
     setReplyTo(message);
   }, []);
 
@@ -488,7 +495,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
   }, []);
 
   // Handle reactions on messages
-  const handleReact = useCallback(async (messageId: number, emoji: string) => {
+  const handleReact = useCallback(async (messageId: string, emoji: string) => {
     if (!user) return;
 
     const newReactions = await toggleMessageReaction(messageId, emoji, user.id);
@@ -543,13 +550,10 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     );
   }
 
-  if (authLoading) {
-    return (
-      <div className={`min-h-screen ${theme.background} ${theme.text} flex items-center justify-center`}>
-        <div className="w-8 h-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin" />
-      </div>
-    );
-  }
+  // No auth gate here. The shell — header, transcript, composer — renders on
+  // the first frame and auth resolves behind it; this early return was the
+  // single reason a first-time visitor watched a bare spinner for up to eight
+  // seconds before anything painted (production-check.md 1.14).
 
   // Override background for healthcare mode (green gradient instead of season theme)
   const isHealthcareActive = activeChatMode === 'tm-healthcare';
@@ -1024,6 +1028,35 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                   )}
                 </div>
               ) : isChatMode ? (
+                // A second boundary around just the transcript: a message that
+                // fails to render should not take the composer and header
+                // with it (1.3).
+                <ErrorBoundary
+                  name="transcript"
+                  fallback={(reset) => (
+                    <div className="mx-auto mt-24 max-w-md rounded-xl border border-amber-500/20 bg-amber-500/[0.06] p-5 text-center">
+                      <p className="text-sm text-amber-100/80">
+                        This conversation couldn&apos;t be displayed.
+                      </p>
+                      <div className="mt-4 flex items-center justify-center gap-3">
+                        <button
+                          type="button"
+                          onClick={reset}
+                          className="rounded-full border border-white/15 bg-white/[0.08] px-4 py-1.5 text-xs font-medium hover:bg-white/[0.14]"
+                        >
+                          Try again
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { reset(); startNewChat(); }}
+                          className="rounded-full border border-white/10 px-4 py-1.5 text-xs font-medium text-white/70 hover:bg-white/[0.06] hover:text-white"
+                        >
+                          Start a new chat
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                >
                 <ChatMode
                   messages={messages}
                   currentPersona={currentPersona}
@@ -1039,7 +1072,10 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                   onMusicVariationsChange={updateMusicVariations}
                   onOpenSesame={() => setIsSesameOpen(true)}
                   onMcpApprovalDecision={handleMcpApprovalDecision}
+                  onRetry={retryMessage}
+                  isRetrying={isLoading}
                 />
+                </ErrorBoundary>
               ) : (
                 <StageMode
                   messages={messages}
@@ -1065,6 +1101,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
               onClearReply={handleClearReply}
               initialMode={healthcareModeFromNav ? 'tm-healthcare' : undefined}
               onModeChange={setActiveChatMode}
+              onStop={stopGeneration}
             />
           </div>
         </div>
@@ -1072,7 +1109,6 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
         <AboutUsToast
           isVisible={showAboutUs}
           onClose={dismissAboutUs}
-          onClick={() => window.open('https://timemachine.notion.site', '_blank')}
           currentPersona={currentPersona}
         />
 
@@ -1165,6 +1201,7 @@ function AppContent() {
       <Route path="/chat/:id" element={<><SEOHead title="Chat" noIndex /><ChatByIdPage /></>} />
       <Route path="/groupchat/:id" element={<><SEOHead title="Group Chat" noIndex /><GroupChatWrapper /></>} />
       <Route path="/groupchat/:id/settings" element={<><SEOHead title="Group Settings" noIndex /><GroupSettingsPage /></>} />
+      <Route path="*" element={<><SEOHead title="Page not found" description="This TimeMachine page doesn't exist." noIndex /><NotFoundPage /></>} />
     </Routes>
   );
 }

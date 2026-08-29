@@ -1,12 +1,13 @@
 import type { VercelRequest } from '@vercel/node';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-if (!supabaseUrl) {
+const supabaseUrlFromEnv = process.env.VITE_SUPABASE_URL;
+if (!supabaseUrlFromEnv) {
   // Fail fast rather than falling back to a hardcoded project URL: a stale
   // fallback silently points production at the wrong database.
   throw new Error('VITE_SUPABASE_URL is not set.');
 }
+const supabaseUrl: string = supabaseUrlFromEnv;
 const supabaseAnonKey = process.env.VITE_SUPABASE_ANON_KEY || '';
 
 export interface AuthenticatedRequestUser {

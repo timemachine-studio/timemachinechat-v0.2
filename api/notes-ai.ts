@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getAuthenticatedRequestUser } from './_lib/auth.js';
 import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
+import { notesAiBodySchema, parseOrReject, rejectIfTooLarge } from './_lib/validation.js';
 
 // ─── Notes AI Co-pilot API ──────────────────────────────────────────
 // Dedicated endpoint for the notes page AI assistant.
@@ -177,11 +178,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!user) return res.status(401).json({ error: 'Sign in is required' });
 
   try {
-    const { title, blocks, instruction } = req.body;
-
-    if (!blocks || !Array.isArray(blocks) || !instruction) {
-      return res.status(400).json({ error: 'Missing required fields: blocks, instruction' });
-    }
+    if (rejectIfTooLarge(req, res)) return;
+    const body = parseOrReject(res, notesAiBodySchema, req.body);
+    if (!body) return;
+    const { title, blocks, instruction } = body;
 
     const noteContext = buildNoteContext(title || '', blocks);
 

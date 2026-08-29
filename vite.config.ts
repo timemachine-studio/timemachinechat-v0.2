@@ -106,7 +106,9 @@ export default defineConfig(({ mode }) => {
                 console.error(`Error executing API handler for ${urlObj.pathname}:`, err);
                 res.statusCode = 500;
                 res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ error: 'Internal Server Error', details: String(err) }));
+                // Never return the exception text: it is a stack trace and
+                // whatever the handler was holding (production-check.md 1.7).
+                res.end(JSON.stringify({ error: { code: 'UNKNOWN', message: 'Internal Server Error' } }));
                 return;
               }
             }

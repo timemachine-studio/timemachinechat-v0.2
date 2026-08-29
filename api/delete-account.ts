@@ -12,11 +12,19 @@ import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
 // and RLS-scoped deletes would leave rows behind in tables the user cannot
 // reach. The id is taken from the verified JWT and never from the body.
 
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-if (!supabaseUrl) {
+const supabaseUrlFromEnv = process.env.VITE_SUPABASE_URL;
+if (!supabaseUrlFromEnv) {
   throw new Error('VITE_SUPABASE_URL is not set.');
 }
+const supabaseUrl: string = supabaseUrlFromEnv;
 const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+function createAdminClient() {
+  return createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+type AdminClient = ReturnType<typeof createAdminClient>;
 
 // Tables holding user-scoped rows, keyed by user_id. Children before parents so
 // a foreign key does not block the delete.
@@ -33,7 +41,7 @@ const USER_TABLES = [
 const STORAGE_BUCKETS = ['user-images', 'music-assets'] as const;
 
 async function purgeBucket(
-  admin: ReturnType<typeof createClient>,
+  admin: AdminClient,
   bucket: string,
   userId: string,
 ): Promise<void> {
@@ -62,9 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const admin = createClient(supabaseUrl as string, serviceRoleKey, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
+  const admin = createAdminClient();
 
   const failures: string[] = [];
 

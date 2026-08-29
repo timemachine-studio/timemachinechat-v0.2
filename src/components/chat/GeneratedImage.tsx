@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, memo, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, memo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Download, X, ZoomIn } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';

@@ -20,6 +20,9 @@ import {
   assertOwnUserId,
 } from './_lib/auth.js';
 import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
+import { apiErrorBody, sendApiError } from './_lib/errors.js';
+import { providerFetch, runWithProviderFallback, type ProviderHop } from './_lib/providerResilience.js';
+import { aiProxyBodySchema, parseOrReject, rejectIfTooLarge } from './_lib/validation.js';
 import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 
 // Initialize Supabase client for server-side operations
@@ -131,35 +134,35 @@ Emoji should be used in a specific GenZ way. To give you the context here the em
 
 [Emoji Dictionary]
 
-😭 - is used to show that you’re so damn happy. Example: “Gurl, you have the actual main character energy 😭”
+😭 - is used to show that you’re so damn happy. Example: “Gurl, you have the actual main character energy 😭”
 
-🫠 - is used to show that you’re excited. Example: “Can’t wait to see you guys together, living happily 🫠 ”
+🫠 - is used to show that you’re excited. Example: “Can’t wait to see you guys together, living happily 🫠 ”
 
-🥰 - is used when it’s cringe. Example: “Yeah perfect idea. This will get us both on the blacklist 🥰”
+🥰 - is used when it’s cringe. Example: “Yeah perfect idea. This will get us both on the blacklist 🥰”
 
-🥹 - is used to show that you’re proud. Example: “Go my gurl. I’m always here and proud of you 🥹”
+🥹 - is used to show that you’re proud. Example: “Go my gurl. I’m always here and proud of you 🥹”
 
-💀 - is used reply to “double meaning” texts. Example: “What did you even mean by that💀”
+💀 - is used reply to “double meaning” texts. Example: “What did you even mean by that💀”
 
-☹️ - is used to show you’re sad. Example: “Awww ☹️ I thought you would like that”
+☹️ - is used to show you’re sad. Example: “Awww ☹️ I thought you would like that”
 
-🥲 - is used to show it’s sad but we have to move on. Example: “Looks like you’re not seeing your bestie for a week. It sucks ik 🥲”
+🥲 - is used to show it’s sad but we have to move on. Example: “Looks like you’re not seeing your bestie for a week. It sucks ik 🥲”
 
-🤡 - is used when it’s about something extremely dumb. Example: “Gurl, stay away from that guy. He acts as if he’s the boss 🤡”
+🤡 - is used when it’s about something extremely dumb. Example: “Gurl, stay away from that guy. He acts as if he’s the boss 🤡”
 
-💅🏻 - is used when its about “feminine energy” or “diva vibes” Example: “You can wear a fancy purple dress with complementary gold jewelries. You’ll slay 💅🏻 ”
+💅🏻 - is used when its about “feminine energy” or “diva vibes” Example: “You can wear a fancy purple dress with complementary gold jewelries. You’ll slay 💅🏻 ”
 
-👍🏻 - is used to show that you’re angry and don’t wanna reply in text. Example: “👍🏻”
+👍🏻 - is used to show that you’re angry and don’t wanna reply in text. Example: “👍🏻”
 
-👀 - is used  when something is adventerous/secretive. Example: “Are you sure? This secret plan would work out? 👀 ”
+👀 - is used  when something is adventerous/secretive. Example: “Are you sure? This secret plan would work out? 👀 ”
 
-🙋🏻‍♀️ - is used to show that you’re here. In a sarcastic manner. Example: “Why are you even stressing my bestie? Look at me. I’m here. Hi~🙋🏻‍♀️”
+🙋🏻‍♀️ - is used to show that you’re here. In a sarcastic manner. Example: “Why are you even stressing my bestie? Look at me. I’m here. Hi~🙋🏻‍♀️”
 
-💁🏻‍♀️ - is used after providing something like study related or stuff. Example: “(after writing something the user wanted e.g a paragraph or email). Okay here you have it 💁🏻‍♀️”
+💁🏻‍♀️ - is used after providing something like study related or stuff. Example: “(after writing something the user wanted e.g a paragraph or email). Okay here you have it 💁🏻‍♀️”
 
-🤷🏻‍♀️ - is used to show that is do this and that, simple as that. that Example: “Apply makeup remover then 🤷🏻‍♀️”
+🤷🏻‍♀️ - is used to show that is do this and that, simple as that. that Example: “Apply makeup remover then 🤷🏻‍♀️”
 
-🤦🏻‍♀️ - is used to show dissapointment. Example: “Did your friend really made you do it? 🤦🏻‍♀️”
+🤦🏻‍♀️ - is used to show dissapointment. Example: “Did your friend really made you do it? 🤦🏻‍♀️”
 
 
 Example reply in play:
@@ -444,7 +447,7 @@ function extractMedicalTerms(message: string): string[] {
   // Normalize and tokenize
   const cleaned = message
     .toLowerCase()
-    .replace(/[^a-z0-9\s\-]/g, ' ')
+    .replace(/[^a-z0-9\s-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -615,7 +618,7 @@ export async function processMemoryTags(
   }
 
   // Remove memory tags from content
-  let cleanedContent = content.replace(memoryRegex, '').trim();
+  const cleanedContent = content.replace(memoryRegex, '').trim();
 
   return { content: cleanedContent, memoryContent, hasSavedMemory };
 }
@@ -1098,7 +1101,8 @@ export async function extractImageContent(imageUrls: string[]): Promise<string> 
     image_url: { url }
   }));
 
-  const response = await fetch(POLLINATIONS_API_URL, {
+  const response = await providerFetch(POLLINATIONS_API_URL, {
+    providerLabel: 'pollinations',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1184,7 +1188,8 @@ export async function callCerebrasAirAPIStreaming(
     toolCount: tools?.length || 0
   }));
 
-  const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+  const response = await providerFetch('https://api.cerebras.ai/v1/chat/completions', {
+    providerLabel: 'cerebras',
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${CEREBRAS_API_KEY}`,
@@ -1272,7 +1277,8 @@ export async function callGroqStandardAPIStreaming(
     requestBody.tool_choice = "auto";
   }
 
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const response = await providerFetch('https://api.groq.com/openai/v1/chat/completions', {
+    providerLabel: 'groq',
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${GROQ_API_KEY}`,
@@ -1433,7 +1439,8 @@ export async function callSecretsToAIAPIStreaming(
     toolCount: tools?.length || 0
   });
 
-  const response = await fetch(SECRETSTOAI_API_URL, {
+  const response = await providerFetch(SECRETSTOAI_API_URL, {
+    providerLabel: 'secretstoai',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1563,7 +1570,8 @@ export async function callNvidiaAPIStreaming(
     toolCount: tools?.length || 0
   });
 
-  const response = await fetch(NVIDIA_API_URL, {
+  const response = await providerFetch(NVIDIA_API_URL, {
+    providerLabel: 'nvidia',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1697,7 +1705,8 @@ export async function callEaonAPIStreaming(
     toolCount: tools?.length || 0
   });
 
-  const response = await fetch(EAON_API_URL, {
+  const response = await providerFetch(EAON_API_URL, {
+    providerLabel: 'eaon',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1832,7 +1841,8 @@ export async function callPollinationsAPIStreaming(
     toolCount: tools?.length || 0
   });
 
-  const response = await fetch(POLLINATIONS_API_URL, {
+  const response = await providerFetch(POLLINATIONS_API_URL, {
+    providerLabel: 'pollinations',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1963,7 +1973,8 @@ async function callSecretsToAIAPI(
     toolCount: tools?.length || 0
   });
 
-  const response = await fetch(SECRETSTOAI_API_URL, {
+  const response = await providerFetch(SECRETSTOAI_API_URL, {
+    providerLabel: 'secretstoai',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2022,7 +2033,8 @@ async function callNvidiaAPI(
     toolCount: tools?.length || 0
   });
 
-  const response = await fetch(NVIDIA_API_URL, {
+  const response = await providerFetch(NVIDIA_API_URL, {
+    providerLabel: 'nvidia',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2085,7 +2097,8 @@ async function callEaonAPI(
     toolCount: tools?.length || 0
   });
 
-  const response = await fetch(EAON_API_URL, {
+  const response = await providerFetch(EAON_API_URL, {
+    providerLabel: 'eaon',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2144,7 +2157,8 @@ async function callPollinationsAPI(
     toolCount: tools?.length || 0
   });
 
-  const response = await fetch(POLLINATIONS_API_URL, {
+  const response = await providerFetch(POLLINATIONS_API_URL, {
+    providerLabel: 'pollinations',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2208,6 +2222,25 @@ export function resolveRunProvider(
   return normalizeStreamingProvider(personaConfig.provider || 'groq', 'groq');
 }
 
+// Fallback chain for the Air persona: one provider's bad minute should not be
+// an outage (production-check.md 1.11).
+//
+// Each hop names a model that provider actually serves. Both alternates are
+// (provider, model) pairs this deployment already uses elsewhere — Groq for
+// the Girlie persona, and the Cerebras default in callCerebrasAirAPIStreaming.
+// A fallback pointed at a model id the provider does not have fails worse than
+// no fallback at all, so do not add a hop without a verified pair.
+const AIR_FALLBACK_HOPS: ProviderHop[] = [
+  { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct' },
+  { provider: 'cerebras', model: 'qwen-3-235b-a22b-instruct-2507' },
+];
+
+export function buildProviderChain(persona: string, provider: string, model: string): ProviderHop[] {
+  const primary: ProviderHop = { provider, model };
+  if (persona !== 'default') return [primary];
+  return [primary, ...AIR_FALLBACK_HOPS.filter(hop => hop.provider !== provider)];
+}
+
 interface StreamingModelConfig {
   model: string;
   temperature?: number;
@@ -2252,7 +2285,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // A browser page on a disallowed origin gets nothing. Non-browser clients
   // send no Origin at all and are handled by the auth check below.
   if (!hasAcceptableOrigin(req)) {
-    return res.status(403).json({ error: 'Origin not allowed' });
+    return res.status(403).json(apiErrorBody('FORBIDDEN', 'Origin not allowed'));
   }
 
   // GET /api/ai-proxy?quota=<persona> — the authoritative remaining count for
@@ -2260,7 +2293,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'GET') {
     const quotaPersona = typeof req.query.quota === 'string' ? req.query.quota : '';
     if (!quotaPersona || !(quotaPersona in AI_PERSONAS)) {
-      return res.status(400).json({ error: 'Unknown persona' });
+      return res.status(400).json(apiErrorBody('BAD_REQUEST', 'Unknown persona'));
     }
 
     const quotaUser = await getAuthenticatedRequestUser(req);
@@ -2269,13 +2302,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const quotaDeviceId = quotaUser ? null : resolveAnonymousDeviceId(req, res);
 
     const quota = await getRemainingQuota(quotaUser?.id ?? null, quotaIp, quotaPersona, quotaDeviceId);
-    if (!quota) return res.status(503).json({ error: 'Service temporarily unavailable' });
+    if (!quota) return res.status(503).json(apiErrorBody('UNAVAILABLE', 'Service temporarily unavailable'));
 
     return res.status(200).json({ ...quota, anonymous: !quotaUser });
   }
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json(apiErrorBody('BAD_REQUEST', 'Method not allowed'));
   }
 
   try {
@@ -2292,16 +2325,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const accessToken = getRequestAccessToken(req);
     const userClient = (userId && accessToken && createUserScopedClient(accessToken)) || supabase;
 
-    const { messages, persona = 'default', imageData, heatLevel = 2, stream = false, flowState = false, inputImageUrls, imageDimensions, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText } = req.body;
+    // Bound every input before doing any work with it (1.8). Oversized and
+    // malformed payloads are rejected here, not after a 300-second run.
+    if (rejectIfTooLarge(req, res)) return;
+    const body = parseOrReject(res, aiProxyBodySchema, req.body);
+    if (!body) return;
 
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Invalid messages format' });
-    }
+    const { messages, persona, imageData, heatLevel, stream, flowState, inputImageUrls, imageDimensions, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText } = body;
 
     const personaConfig = AI_PERSONAS[persona as keyof typeof AI_PERSONAS];
-    if (!personaConfig) {
-      return res.status(400).json({ error: 'Invalid persona' });
-    }
 
     // Get client IP for rate limiting
     const clientIP = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket.remoteAddress || 'unknown';
@@ -2311,10 +2343,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // localStorage. Personas with a zero anonymous allowance need an account.
     const anonymousDeviceId = userId ? null : resolveAnonymousDeviceId(req, res);
     if (!userId && getAnonymousLimit(persona) <= 0) {
-      return res.status(401).json({
-        error: 'Sign in to use this persona',
-        type: 'authRequired'
-      });
+      return res.status(401).json(
+        apiErrorBody('AUTH_REQUIRED', 'Sign in to use this persona', { type: 'authRequired' })
+      );
     }
 
     // Which upstream this run will bill. Special modes override the model but
@@ -2326,22 +2357,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const limitOutcome = await checkRateLimit(userId, ip, persona, { anonymousDeviceId, provider });
     if (!limitOutcome.allowed) {
       if (limitOutcome.reason === 'backend_error') {
-        return res.status(503).json({
-          error: 'Service temporarily unavailable',
-          type: 'rateLimitBackend'
-        });
+        return res.status(503).json(
+          apiErrorBody('UNAVAILABLE', 'Service temporarily unavailable', { type: 'rateLimitBackend' })
+        );
       }
       if (limitOutcome.reason === 'spend_ceiling') {
-        return res.status(503).json({
-          error: 'Service temporarily unavailable',
-          type: 'spendCeiling'
-        });
+        return res.status(503).json(
+          apiErrorBody('UNAVAILABLE', 'Service temporarily unavailable', { type: 'spendCeiling' })
+        );
       }
-      return res.status(429).json({
-        error: 'Rate limit exceeded',
-        type: 'rateLimit',
-        ...(userId ? {} : { anonymous: true, limit: limitOutcome.limit })
-      });
+      return res.status(429).json(
+        apiErrorBody('RATE_LIMITED', 'Rate limit exceeded', {
+          type: 'rateLimit',
+          ...(userId ? {} : { anonymous: true, limit: limitOutcome.limit }),
+        })
+      );
     }
 
     // Resolve special mode per-persona config (if active)
@@ -2398,12 +2428,12 @@ ${TOOL_GUARDRAIL}
 ${thinkingDirective}`;
 
     // Initialize model, system prompt, and tools — apply special mode overrides
-    let modelToUse = specialModeConfig?.model || personaConfig.model;
+    const modelToUse = specialModeConfig?.model || personaConfig.model;
     let systemPromptToUse = enhancedSystemPrompt;
     // Decided in code, not asked of the model: see api/_lib/tools.ts.
     const imageAllowed = resolveImageAllowed(messages, !!imageData);
     const searchAllowed = resolveWebSearchAllowed(messages);
-    let toolsToUse: any[] = selectTools({
+    const toolsToUse: any[] = selectTools({
       specialModeConfig,
       includeSkills: persona === 'pro',
       imageAllowed,
@@ -2549,6 +2579,12 @@ ${thinkingDirective}`;
         // model recover on the next iteration.
         const toolPolicy = createToolPolicy({ imageAllowed, searchAllowed });
 
+        // Opening a provider stream is the only retryable moment: it either
+        // yields a stream or throws before a single byte reaches the client.
+        // Once tokens are flowing there is no resume, so a mid-stream death
+        // surfaces as truncated instead (1.9/1.11).
+        const providerChain = buildProviderChain(persona, runProvider, runModel);
+
         const loopResult = await runAgentLoop({
           messages: apiMessages,
           tools: runTools,
@@ -2558,17 +2594,27 @@ ${thinkingDirective}`;
             emitToolText: (text) => { res.write(`\n\n${text}\n\n`); },
             emitMarker: (marker) => { res.write(marker); },
           },
-          callModel: (msgs, activeTools) => dispatchStreamingProvider(
-            runProvider,
-            msgs,
-            activeTools,
-            {
-              model: runModel,
-              temperature: runTemperature,
-              maxTokens: runMaxTokens,
-              reasoningEffort: reasoningEffortToUse,
+          callModel: async (msgs, activeTools) => {
+            const run = await runWithProviderFallback(
+              providerChain,
+              (hop) => dispatchStreamingProvider(
+                hop.provider,
+                msgs,
+                activeTools,
+                {
+                  model: hop.model,
+                  temperature: runTemperature,
+                  maxTokens: runMaxTokens,
+                  reasoningEffort: reasoningEffortToUse,
+                }
+              ),
+              (message) => console.log(`[${persona}] ${message}`),
+            );
+            if (run.provider !== runProvider) {
+              console.warn(`[${persona}] fell back from ${runProvider} to ${run.provider}`);
             }
-          ),
+            return run.value;
+          },
           log: (message) => console.log(`[${persona}] ${message}`),
         });
 
@@ -2601,8 +2647,14 @@ ${thinkingDirective}`;
         res.write('[STATUS_END]');
         res.end();
       } catch (error) {
-        console.error('Streaming error:', error);
-        res.status(500).end('Stream error occurred');
+        // Never log the prompt or the partial generation, only the failure.
+        console.error('Streaming error:', error instanceof Error ? error.message : error);
+        // Headers are already committed by this point (the status/keep-alive
+        // writes above), so res.status(500) would be a no-op and .end(text)
+        // would append the error to the assistant's message. sendApiError
+        // switches to a control frame and ends the stream *without*
+        // [STATUS_END], which is how the client learns the turn failed (1.9).
+        sendApiError(res, 'PROVIDER_DOWN', 'The model provider failed mid-response.');
       }
     } else {
       // Non-streaming response (fallback)
@@ -2658,7 +2710,8 @@ ${thinkingDirective}`;
               requestBody.tools = toolsToUse;
               requestBody.tool_choice = "auto";
             }
-            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            const response = await providerFetch('https://api.groq.com/openai/v1/chat/completions', {
+              providerLabel: 'groq',
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
@@ -2713,7 +2766,8 @@ ${thinkingDirective}`;
               requestBody.tools = toolsToUse;
               requestBody.tool_choice = "auto";
             }
-            const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+            const response = await providerFetch('https://api.cerebras.ai/v1/chat/completions', {
+              providerLabel: 'cerebras',
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${process.env.CEREBRAS_API_KEY}`,
@@ -2744,7 +2798,8 @@ ${thinkingDirective}`;
               requestBody.tool_choice = "auto";
             }
 
-            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            const response = await providerFetch('https://api.groq.com/openai/v1/chat/completions', {
+              providerLabel: 'groq',
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
@@ -2809,7 +2864,8 @@ ${thinkingDirective}`;
               toolCount: toolsToUse?.length || 0
             }));
 
-            const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+            const response = await providerFetch('https://api.cerebras.ai/v1/chat/completions', {
+              providerLabel: 'cerebras',
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${process.env.CEREBRAS_API_KEY}`,
@@ -2828,7 +2884,7 @@ ${thinkingDirective}`;
         }
       } else if (persona === 'pro') {
         // Run the agentic loop for TimeMachine PRO (non-streaming)
-        let currentMessages = [...apiMessages];
+        const currentMessages = [...apiMessages];
         let iteration = 0;
         const maxIterations = 5;
         let finalContent = '';
@@ -2880,7 +2936,8 @@ ${thinkingDirective}`;
               requestBody.tools = activeTools;
               requestBody.tool_choice = "auto";
             }
-            const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            const response = await providerFetch('https://api.groq.com/openai/v1/chat/completions', {
+              providerLabel: 'groq',
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
@@ -2903,7 +2960,8 @@ ${thinkingDirective}`;
               requestBody.tools = activeTools;
               requestBody.tool_choice = "auto";
             }
-            const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+            const response = await providerFetch('https://api.cerebras.ai/v1/chat/completions', {
+              providerLabel: 'cerebras',
               method: 'POST',
               headers: {
                 'Authorization': `Bearer ${process.env.CEREBRAS_API_KEY}`,
@@ -3041,7 +3099,8 @@ ${thinkingDirective}`;
             requestBody.tools = toolsToUse;
             requestBody.tool_choice = "auto";
           }
-          const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+          const response = await providerFetch('https://api.cerebras.ai/v1/chat/completions', {
+            providerLabel: 'cerebras',
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${process.env.CEREBRAS_API_KEY}`,
@@ -3051,7 +3110,8 @@ ${thinkingDirective}`;
           });
           apiResponse = await response.json();
         } else {
-          const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          const response = await providerFetch('https://api.groq.com/openai/v1/chat/completions', {
+            providerLabel: 'groq',
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
@@ -3127,20 +3187,29 @@ ${thinkingDirective}`;
     }
 
   } catch (error) {
-    console.error('AI Proxy Error:', error);
+    // Log the failure, never the request body or prompt content.
+    console.error('AI Proxy Error:', error instanceof Error ? error.message : error);
 
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-    // Check for rate limit errors
-    if (errorMessage.includes('Rate limit') || errorMessage.includes('429')) {
-      return res.status(429).json({
-        error: 'Rate limit exceeded',
-        type: 'rateLimit'
-      });
+    // A streaming response may already be committed by the time an error
+    // bubbles up here. Writing a JSON body onto it would land inside the
+    // assistant's message (1.9).
+    if (res.headersSent) {
+      sendApiError(res, 'UNKNOWN', 'The request failed.');
+      return;
     }
 
-    return res.status(500).json({
-      error: 'We are facing huge load on our servers and thus we\'ve had to temporarily limit access to maintain system stability. Please be patient, we hate this as much as you do but this thing doesn\'t grow on trees :")'
-    });
+    // Check for rate limit errors
+    if (errorMessage.includes('Rate limit') || errorMessage.includes('429')) {
+      return res.status(429).json(
+        apiErrorBody('RATE_LIMITED', 'Rate limit exceeded', { type: 'rateLimit' })
+      );
+    }
+
+    return res.status(500).json(apiErrorBody(
+      'UNKNOWN',
+      'We are facing huge load on our servers and thus we\'ve had to temporarily limit access to maintain system stability. Please be patient, we hate this as much as you do but this thing doesn\'t grow on trees :")'
+    ));
   }
 }

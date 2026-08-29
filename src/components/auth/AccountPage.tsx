@@ -50,7 +50,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
   const [aboutMe, setAboutMe] = useState(profile?.about_me || '');
   const [gender, setGender] = useState((profile as any)?.gender || '');
   const [birthDate, setBirthDate] = useState((profile as any)?.birth_date || '');
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [success, setSuccess] = useState('');
   const [error, setError] = useState('');
   const [editingField, setEditingField] = useState<string | null>(null);
@@ -150,7 +150,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
       } else {
         setError('Failed to upload avatar');
       }
-    } catch (err) {
+    } catch {
       setError('Error uploading avatar');
     } finally {
       setUploadingAvatar(false);
