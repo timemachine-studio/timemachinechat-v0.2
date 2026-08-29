@@ -52,7 +52,9 @@ export const LOADING_WORDS = [
 ] as const;
 
 export const INITIAL_MESSAGE = {
-  id: 1,
+  // Fixed id: the welcome bubble is UI furniture, not a real turn, so code
+  // that filters it out of API context can recognise it (1.12).
+  id: 'initial',
   content: AI_PERSONAS.default.initialMessage,
   isAI: true,
 };

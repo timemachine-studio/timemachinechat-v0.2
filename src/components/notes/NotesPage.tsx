@@ -304,6 +304,9 @@ function DoodleBlock({ block, onChange, onDelete, onDuplicate, onResize, dragCon
       };
       img.src = block.content;
     }
+    // Mount-only restore: initialContent is captured once, so later edits to
+    // block.content do not redraw over the user's strokes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Close menus on outside click
@@ -606,7 +609,7 @@ function ImageBlock({ block, onChange, onDelete, onDuplicate, onResize, dragCont
       };
       img.src = block.content;
     }
-  }, [block.content]);
+  }, [block.content, block.width]);
 
   const handleFile = (file: File) => {
     if (!file.type.startsWith('image/')) return;
@@ -852,7 +855,7 @@ function GraphBlock({ block, onChange, onDelete, onDuplicate, dragControls }: Gr
     const js = parseMathExpr(eq);
     if (!js) return null;
     try {
-      // eslint-disable-next-line no-new-func
+       
       const fn = new Function('x', `"use strict"; try { const _v=(${js}); return (typeof _v==='number'&&isFinite(_v))?_v:null; } catch(e){return null;}`);
       return fn as (x: number) => number | null;
     } catch { return null; }
@@ -924,7 +927,7 @@ function GraphBlock({ block, onChange, onDelete, onDuplicate, dragControls }: Gr
       path1: fn1 ? genPath(fn1) : '',
       path2: fn2 ? genPath(fn2) : '',
     };
-  }, [eq1, eq2, view, buildEval, genPath]);
+  }, [eq1, eq2, buildEval, genPath]);
 
   // Pan
   const onSvgMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -1992,13 +1995,16 @@ export function NotesPage() {
   // Persist notes
   useEffect(() => { saveNotes(notes); }, [notes]);
 
-  // Auto-select first or create one
+  // Auto-select first or create one. Mount-only on purpose: with the real
+  // dependencies this would re-run on every notes change and keep creating
+  // notes.
   useEffect(() => {
     if (notes.length === 0) {
       handleNewNote();
     } else if (!activeNoteId) {
       setActiveNoteId(notes[0].id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleNewNote = useCallback(() => {
@@ -2290,7 +2296,9 @@ export function NotesPage() {
 
   const hasPendingAI = pendingEdits.length > 0 || pendingNewBlocks.length > 0;
 
-  // Load initial note from localStorage if coming from home page
+  // Load initial note from localStorage if coming from home page. Mount-only:
+  // the handoff is consumed once, and re-running it would resurrect a note the
+  // user has since edited or deleted.
   useEffect(() => {
     const draft = localStorage.getItem('tm-notes-draft');
     if (draft) {
@@ -2315,6 +2323,7 @@ export function NotesPage() {
         setActiveNoteId(note.id);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

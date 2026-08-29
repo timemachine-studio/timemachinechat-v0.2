@@ -4,6 +4,7 @@ import { getAuthenticatedRequestUser } from './_lib/auth.js';
 import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
 import { cleanupFlightControlRuns, enabledMcpServers, flightControlsAdmin, loadEnabledFlightControls } from './_lib/flightControls.js';
 import { discoverMcpTools, executeMcpTool } from './_lib/mcpClient.js';
+import { mcpApprovalBodySchema, parseOrReject } from './_lib/validation.js';
 
 interface ContinuationState {
   args: Record<string, unknown>;
@@ -70,10 +71,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!user) return res.status(401).json({ error: 'Sign in is required' });
   void cleanupFlightControlRuns();
 
-  const { runId, decision } = req.body || {};
-  if (typeof runId !== 'string' || !['approve', 'deny'].includes(decision)) {
-    return res.status(400).json({ error: 'Invalid approval request' });
-  }
+  const approval = parseOrReject(res, mcpApprovalBodySchema, req.body || {});
+  if (!approval) return;
+  const { runId, decision } = approval;
 
   const { data: run, error: runError } = await flightControlsAdmin
     .from('mcp_tool_runs')

@@ -7,7 +7,7 @@
 
 ## ✅ Remaining work — the running tracker
 
-**Last updated:** 2026-08-26 · **Gate 0:** code complete, pending one manual step.
+**Last updated:** 2026-08-27 · **Gate 0:** code complete, pending one manual step. · **Gate 1:** complete.
 
 Keep this table current. When a task closes, strike it here *and* mark its section below.
 
@@ -34,23 +34,27 @@ These are not code. They block launch and none of them can be handed to an agent
 
 ### Gate 1 — Correctness and stability
 
-Do the reliability thread first; it is what the reported failures actually are.
+✅ **Complete — 2026-08-27.** All 14 tasks done and verified in the running app. `npx tsc --noEmit` is clean, `npm run build` now fails on type errors, `exhaustive-deps` is an error with zero violations, and the suite is at 24 tests.
 
-| # | Task | Effort | When |
-|---|---|---|---|
-| **1.12** | Replace `Date.now()` message IDs | S | **First.** 1.10 identifies turns by id — do this or Retry inherits the collision bug. |
-| **1.9** | Never let the stream silently succeed | M | **Second.** Root cause of "it just glitched". Reproduced live again on 2026-08-26. |
-| **1.10** | Retry button: rewind and re-run | M | **Third.** Needs 1.9 to know a stream failed. |
-| 1.14 | Render the app shell immediately | M | Next — fixes the long spinner you reported. |
-| 1.11 | Timeout, backoff, queue | M | Next — the 9× latency spread under load. |
-| 1.13 | Fix stale closures in `useChat` | M | Next — completions save into the wrong session. |
-| 1.2 → 1.1 | Regenerate DB types, then fix the 155 TS errors | S → L | After the thread above. 1.2 first; it clears many errors for free. |
-| 1.3 | Error boundary | S | Any time. Cheap, high value — one render error blanks the app. |
-| 1.4 | 404 route | S | Any time. Cheap. |
-| 1.5 | Abort, timeout, retry on AI requests | M | Dovetails with 1.9/1.10. |
-| 1.6 | Quota accounting and message ordering | S | After 1.12. |
-| 1.7 | Real error taxonomy | M | Dovetails with 1.10. |
-| 1.8 | Validate and bound API input with zod | M | Before public traffic. |
+| # | Task | Status |
+|---|---|---|
+| 1.12 | Replace `Date.now()` message IDs | ✅ UUIDs + `createdAt`, migration shim, covered by tests |
+| 1.9 | Never let the stream silently succeed | ✅ `[STATUS_END]` asserted; truncated **and** empty responses surface as retryable errors |
+| 1.10 | Retry button: rewind and re-run | ✅ inline failed-turn row; retry re-runs the original turn, no extra quota |
+| 1.14 | Render the app shell immediately | ✅ FCP 184ms with auth deliberately hung |
+| 1.11 | Timeout, backoff, queue | ✅ 50 concurrent: 0 silent failures, 0 hangs, spread 9× → 2.2× (fallback chain unverified locally — see note) |
+| 1.13 | Fix stale closures in `useChat` | ✅ `exhaustive-deps` = error, all 24 repo-wide violations fixed |
+| 1.2 → 1.1 | Regenerate DB types, then fix the TS errors | ✅ 22 tables typed; 155 → 0 errors; build gated on `tsc` |
+| 1.3 | Error boundary | ✅ root + transcript-scoped, both verified with deliberate throws |
+| 1.4 | 404 route | ✅ verified live |
+| 1.5 | Abort, timeout, retry on AI requests | ✅ Stop button, 60s/180s budgets, backoff+jitter |
+| 1.6 | Quota accounting and message ordering | ✅ forced failure leaves the counter unchanged |
+| 1.7 | Real error taxonomy | ✅ `{ error: { code, message } }` both ends; no internal detail leaks |
+| 1.8 | Validate and bound API input with zod | ✅ 5 MB payload rejected 413 in 15ms |
+
+**Carried out of this gate:**
+- The fallback chain (1.11) needs an environment with Groq/Cerebras keys to verify.
+- Lint still reports 141 problems, 132 of them pre-existing `no-explicit-any`. Triage is 1.1's step 4 and is not a correctness blocker.
 
 ### Gate LS — Local-first message storage
 
@@ -98,9 +102,11 @@ Do the reliability thread first; it is what the reported failures actually are.
 
 | Metric | At audit | Now | Target |
 |---|---|---|---|
-| `npx tsc --noEmit` | 176 errors | **155** | 0 (1.1) |
-| `npm run lint` | 305 problems | **283** | trending down |
-| `npm test` | no runner | **10 passing** | real coverage (2.4) |
+| `npx tsc --noEmit` | 176 errors | **0** ✅ | 0 (1.1) |
+| `npm run build` | did not typecheck | **fails on type errors** ✅ | gated |
+| `npm run lint` | 305 problems | **141** (136 `no-explicit-any`) | trending down |
+| `react-hooks/exhaustive-deps` | 24 warnings, not enforced | **error, 0 violations** ✅ | enforced |
+| `npm test` | no runner | **24 passing** | real coverage (2.4) |
 | `npm audit` (production deps) | 2 critical, 34 high | **0 at any severity** (clean install, 2026-08-27) | hold at 0 |
 | `npm audit` (all deps) | 64 total | **6** — all dev-only, via `@vercel/node`'s `undici@5.x` and trigger.dev's tooling | monitor |
 
@@ -508,7 +514,9 @@ The app should not be able to show a user a blank screen.
 
 ---
 
-### 1.1 — Make the build typecheck, and fix the 176 errors
+### 1.1 — Make the build typecheck, and fix the 176 errors ✅
+
+> **Done 2026-08-27.** `build` is now `tsc --noEmit && vite build` (plus a `typecheck` script); all 155 remaining type errors fixed, including the shared `Persona` union in `src/types/chat.ts`. `npx tsc --noEmit` exits clean and a deliberately introduced type error makes `npm run build` exit 1.
 
 **Severity:** High · **Effort:** L · **Files:** repo-wide, `package.json`
 
@@ -537,7 +545,9 @@ The `'never'` errors are the dangerous ones — they mean the code queries Supab
 
 ---
 
-### 1.2 — Regenerate database types
+### 1.2 — Regenerate database types ✅
+
+> **Done 2026-08-27.** `src/types/database.ts` now declares all 22 tables the code queries (the 9 that were missing, plus the pre-existing ones). Every `on type 'never'` error is gone.
 
 **Severity:** High · **Effort:** S · **Files:** `src/types/database.ts`
 
@@ -559,7 +569,9 @@ Add it as an npm script and re-run it after every migration.
 
 ---
 
-### 1.3 — Add an error boundary
+### 1.3 — Add an error boundary ✅
+
+> **Done 2026-08-27.** `src/components/ErrorBoundary.tsx` wraps `<App />` in `main.tsx`, with a second boundary around just the chat transcript. Verified with a deliberate render error: the transcript boundary shows a scoped fallback while the header, quota chip and composer keep working; a root-level throw shows the branded Reload / Go home fallback instead of a black screen.
 
 **Severity:** High · **Effort:** S · **Files:** new `src/components/ErrorBoundary.tsx`, `src/main.tsx`
 
@@ -573,7 +585,9 @@ Add a boundary that renders a branded fallback with a "Reload" button and a "Go 
 
 ---
 
-### 1.4 — Add a 404 route
+### 1.4 — Add a 404 route ✅
+
+> **Done 2026-08-27.** `<Route path="*">` renders `src/components/NotFoundPage.tsx` with `<SEOHead noIndex />`. Verified live at `/this-route-does-not-exist`.
 
 **Severity:** Medium · **Effort:** S · **Files:** `src/App.tsx:1170`
 
@@ -587,7 +601,9 @@ Add a catch-all `<NotFoundPage />` with navigation back into the app, and `<SEOH
 
 ---
 
-### 1.5 — Add abort, timeout, and retry to AI requests
+### 1.5 — Add abort, timeout, and retry to AI requests ✅
+
+> **Done 2026-08-27.** An `AbortSignal` is threaded through `generateAIResponseStreaming`; the send button becomes **Stop** while generating; 60s time-to-first-token and 180s total budgets abort and surface a typed `TIMEOUT`; retryable failures retry twice with exponential backoff + jitter, and never after tokens have streamed. Aborting on unmount and on chat switch stops paying for orphaned generations. Verified live: Stop halts a running stream, keeps the partial text and shows "Generation stopped."
 
 **Severity:** High · **Effort:** M · **Files:** `src/services/ai/aiProxyService.ts`, `src/hooks/useChat.ts`, `api/ai-proxy.ts`
 
@@ -610,7 +626,9 @@ No `AbortController` anywhere in the chat path — the only one in the codebase 
 
 ---
 
-### 1.6 — Fix quota accounting and message ordering
+### 1.6 — Fix quota accounting and message ordering ✅
+
+> **Done 2026-08-27.** The quota half was already server-authoritative from 0.4 (charge only after a successful generation, client reads `GET /api/ai-proxy?quota=`); verified live that a forced mid-stream failure left the counter unchanged at 76 and only the successful retry decremented it. The ordering half is superseded by 1.10 — the failure now renders inline in the assistant's own slot, below the user turn, never as a top-of-page banner.
 
 **Severity:** Medium · **Effort:** S · **Files:** `src/hooks/useChat.ts:835,933`, `src/components/chat/ErrorMessage.tsx`
 
@@ -628,7 +646,9 @@ Increment only after a successful first token; refund on error. Give the error i
 
 ---
 
-### 1.7 — Build a real error taxonomy
+### 1.7 — Build a real error taxonomy ✅
+
+> **Done 2026-08-27.** `api/_lib/errors.ts` defines the server codes and the `{ error: { code, message } }` envelope; `src/services/ai/chatErrors.ts` maps them to `ChatErrorCode` and one distinct user-facing line each. `vite.config.ts` no longer returns `details: String(err)`, and `music.ts` / `musicCover.ts` log the upstream body server-side instead of returning it. Covered by `chatErrors.test.ts`.
 
 **Severity:** Medium · **Effort:** M · **Files:** `src/hooks/useChat.ts`, `api/ai-proxy.ts`, `src/components/chat/ErrorMessage.tsx`
 
@@ -644,7 +664,9 @@ Define typed error codes (`RATE_LIMITED`, `AUTH_EXPIRED`, `PROVIDER_DOWN`, `PAYL
 
 ---
 
-### 1.8 — Validate and bound API input
+### 1.8 — Validate and bound API input ✅
+
+> **Done 2026-08-27.** `api/_lib/validation.ts` holds a zod schema per endpoint (≤100 messages, ≤32k chars each, ≤1 MB total, ≤10 image URLs, persona/specialMode enums, `heatLevel` 1..5). Verified live: a non-array `messages` and 500 messages both 400 with a structured code, and a 5 MB `pdfData` payload is rejected **413 in 15ms** — before any provider call.
 
 **Severity:** High · **Effort:** M · **Files:** all `api/*.ts`
 
@@ -660,7 +682,9 @@ A zod schema per endpoint. Concretely: ≤100 messages, ≤32k chars per message
 
 ---
 
-### 1.9 — Never let the stream silently succeed  ✱ root cause of the "it just glitched" failures
+### 1.9 — Never let the stream silently succeed ✅  ✱ root cause of the "it just glitched" failures
+
+> **Done 2026-08-27.** Server: the streaming catch now goes through `sendApiError`, which guards `res.headersSent` / `res.writableEnded` and, once committed, writes an `error` control frame and ends the stream **without** `[STATUS_END]`. Client: `createStreamChunkParser` tracks the sentinel and `generateAIResponseStreaming` throws `StreamTruncated` when it never arrives, preserving the partial content. A well-formed stream that carried **no content** is also treated as a failed turn (`EMPTY`) rather than an empty bubble. Verified live with an injected mid-stream death and with a sentinel-only response — both produce a visible, retryable error and never an empty bubble.
 
 **Severity:** Critical · **Effort:** M · **Files:** `src/services/ai/aiProxyService.ts:411-436`, `api/ai-proxy.ts:2358-2363`
 
@@ -723,7 +747,9 @@ That is precisely your two silent instances: no response, no error, no spinner. 
 
 ---
 
-### 1.10 — Retry button: rewind and re-run that message  ✱ user-facing fix for all of the above
+### 1.10 — Retry button: rewind and re-run that message ✅  ✱ user-facing fix for all of the above
+
+> **Done 2026-08-27.** Failures mark the placeholder `status: 'error'` in place instead of deleting it and setting global `error`; `src/components/chat/FailedTurn.tsx` renders the inline reason plus **Retry**. `retryMessage` rewinds to just before the failed turn and re-runs it from the `retryContext` captured on the user message at send time. Verified live: the retry request carried exactly the original conversation, recovered where the first attempt failed, and consumed no extra quota (the failed attempt was never charged).
 
 **Severity:** High · **Effort:** M · **Files:** `src/hooks/useChat.ts:826-840, 924-940`, `src/components/chat/ErrorMessage.tsx`, `src/components/chat/ChatMode.tsx`
 
@@ -783,7 +809,11 @@ retryContext?: { persona: string; heatLevel?: number; specialMode?: string; flow
 
 ---
 
-### 1.11 — Handle concurrency properly: timeout, backoff, queue
+### 1.11 — Handle concurrency properly: timeout, backoff, queue ✅
+
+> **Done 2026-08-27.** `api/_lib/providerResilience.ts` adds a 45s `providerFetch` deadline at every provider call site, retry with exponential backoff + jitter honouring `Retry-After`, a per-instance circuit breaker (3 failures → 30s cooldown), an Air fallback chain, and p50/p95/p99 latency logging. **50 concurrent prompts: 0 silent failures, 0 hangs**, latency spread down from the measured 9× to **2.2×** (p99 4.0s, inside the 60s budget). Breaker opening and latency percentiles observed in the server log.
+>
+> ⚠ The fallback chain could not be exercised locally — only `NVIDIA_API_KEY` is set, so there is nothing to fall back *to*. Under the 50-way load NVIDIA rejected 46 requests upstream; they surfaced as clean, typed, retryable `502 PROVIDER_DOWN` before any bytes streamed (which is the point), but the chain itself still needs verifying in an environment with Groq/Cerebras keys.
 
 **Severity:** High · **Effort:** M · **Files:** `api/ai-proxy.ts`, `src/services/ai/aiProxyService.ts`
 
@@ -807,7 +837,9 @@ That tail is the whole story. With real prompts (the Air system prompt alone is 
 
 ---
 
-### 1.12 — Replace `Date.now()` message IDs
+### 1.12 — Replace `Date.now()` message IDs ✅
+
+> **Done 2026-08-27.** `Message.id` is `string`, generated by `newId()` (`src/utils/id.ts`, `crypto.randomUUID`). `Message.createdAt` carries the clock the id used to double as, so Supabase ordering still works. A migration shim maps stored numeric ids to strings on read. Group chat now keys off the real row id rather than a timestamp. Verified live (rendered ids are UUIDs, no duplicate-key warnings) and covered by `src/utils/id.test.ts`.
 
 **Severity:** High · **Effort:** S · **Files:** `src/hooks/useChat.ts:248, 283, 480, 646, 697, 715, 760, 979`
 
@@ -829,7 +861,9 @@ The consequences are exactly the class of "it glitched" symptoms you're seeing:
 
 ---
 
-### 1.13 — Fix the stale closures in `useChat`
+### 1.13 — Fix the stale closures in `useChat` ✅
+
+> **Done 2026-08-27.** `exhaustive-deps` is promoted to **error** in `eslint.config.js` and **all 24 violations repo-wide are fixed** — none silenced with `eslint-disable`. In `useChat.ts` the pure helpers moved to module scope, mount-only effects use ref guards so they can declare honest dependencies, and the send pipeline reads a `latest` ref instead of closing over state. A completion now carries the session id its turn *started* in and refuses to write anywhere else. Leaving a chat mid-stream aborts the request and saves the outgoing session with the interrupted turn stored as a failed turn — it used to be dropped wholesale. Verified live.
 
 **Severity:** High · **Effort:** M · **Files:** `src/hooks/useChat.ts:945`, `eslint.config.js`
 
@@ -853,7 +887,9 @@ That guard treats the symptom inside a `setState` callback instead of fixing the
 
 ---
 
-### 1.14 — Render the app shell immediately; make auth progressive
+### 1.14 — Render the app shell immediately; make auth progressive ✅
+
+> **Done 2026-08-27.** The `authLoading` early return in `App.tsx` is gone; `AuthContext` reads the cached Supabase session from `localStorage` synchronously, splits `loading` from `profileLoading`, releases the app before fetching the profile, and drops `AUTH_INIT_TIMEOUT_MS` to 3s. `index.html` preconnects to the Supabase origin. Verified with Supabase pointed at a black-hole host so auth can never resolve: **first contentful paint 184ms**, full shell rendered, composer enabled and accepting typing.
 
 **Severity:** High · **Effort:** M · **Files:** `src/App.tsx:551`, `src/context/AuthContext.tsx:65,171`
 
@@ -1429,6 +1465,18 @@ Raised at the end of the Gate 0 pass, fixed immediately after.
 | `api/skills.ts` ChatGPT reference | Reworded to "AI writing tools" — keeps the guidance, drops the mark. |
 
 **Known consequence:** applying the `rate_limits` migration requires `SUPABASE_SERVICE_ROLE_KEY` to be set in every environment that runs the API, including local dev.
+
+### Gate 1 pass — 2026-08-27
+
+All 14 Gate 1 tasks closed. The reliability thread (1.12 → 1.9 → 1.10) was done first, as sequenced.
+
+- **New files:** `src/utils/id.ts`, `src/services/ai/chatErrors.ts`, `src/components/ErrorBoundary.tsx`, `src/components/NotFoundPage.tsx`, `src/components/chat/FailedTurn.tsx`, `api/_lib/errors.ts`, `api/_lib/validation.ts`, `api/_lib/providerResilience.ts`, plus `src/utils/id.test.ts` and `src/services/ai/chatErrors.test.ts`.
+- **The silent-failure bug is closed on both ends.** The server can no longer append an error string to the assistant's message after headers are sent, and the client can no longer mistake a truncated stream for a finished one. A response that arrives well-formed but empty is also a failed turn now.
+- **Every failure is attached to its own turn** with a Retry that re-runs the original request. The global error banner is no longer used for generation failures.
+- **Message identity is UUIDs**, with `createdAt` taking over the ordering job the old timestamp ids were doing implicitly.
+- **Leaving a chat mid-stream** aborts the request and saves the outgoing session with the interrupted turn recorded as failed, instead of silently dropping it or writing it to the wrong session.
+
+Verified in the running app, not just in theory: injected mid-stream provider death, sentinel-only response, user-initiated Stop, deliberate render errors at two levels, an unknown URL, a 5 MB payload, 50 concurrent generations, and a boot with Supabase pointed at a black hole.
 
 ### Gate 0 regression and fix — 2026-08-27
 

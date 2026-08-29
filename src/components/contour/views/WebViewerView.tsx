@@ -13,14 +13,15 @@ export function WebViewerView({
     // Initialize to empty string so the very first trigger waits the 800ms debounce
     const [debouncedUrl, setDebouncedUrl] = useState('');
 
+    const detectedUrl = web?.url;
     useEffect(() => {
-        if (!web) return;
+        if (!detectedUrl) return;
         setLoading(true);
         const timer = setTimeout(() => {
-            setDebouncedUrl(web.url);
+            setDebouncedUrl(detectedUrl);
         }, 800);
         return () => clearTimeout(timer);
-    }, [web?.url]);
+    }, [detectedUrl]);
 
     if (!web) return null;
 

@@ -160,7 +160,7 @@ export function WelcomeModal({ isOpen, onAccessGranted }: WelcomeModalProps) {
                         >
                           TimeMachine
                         </h1>
-                        <style jsx>{`
+                        <style>{`
                           @keyframes shimmer {
                             0% {
                               filter: brightness(1);
@@ -262,7 +262,7 @@ export function WelcomeModal({ isOpen, onAccessGranted }: WelcomeModalProps) {
                           }}
                         />
                         
-                        <style jsx>{`
+                        <style>{`
                           @keyframes shine {
                             0% {
                               transform: translateX(-100%);

@@ -16,11 +16,14 @@ import { AudioPlayerBubble } from './AudioPlayerBubble';
 import { CodeBlock } from './CodeBlock';
 import { BrandOverride } from '../brand/BrandLogo';
 import { MusicComposeCard, SavedVariation } from './MusicComposeCard';
+import type { Components } from 'react-markdown';
 
-interface AIMessageProps extends MessageProps {
+// MessageProps declares onAnimationComplete as `() => void`; the AI message
+// passes the id back, so it is redeclared rather than widened here.
+interface AIMessageProps extends Omit<MessageProps, 'onAnimationComplete'> {
   isChatMode: boolean;
-  messageId: number;
-  onAnimationComplete: (messageId: number) => void;
+  messageId: string;
+  onAnimationComplete: (messageId: string) => void;
   currentPersona?: keyof typeof AI_PERSONAS;
   previousMessage?: string | null;
   isStreaming?: boolean;
@@ -30,7 +33,7 @@ interface AIMessageProps extends MessageProps {
   specialMode?: string;
   brandOverride?: BrandOverride;
   musicVariations?: SavedVariation[];
-  onMusicVariationsChange?: (messageId: number, variations: SavedVariation[]) => void;
+  onMusicVariationsChange?: (messageId: string, variations: SavedVariation[]) => void;
   rawContent?: string;
 }
 
@@ -74,7 +77,7 @@ const processMemoryContent = (content: string): { cleanContent: string; hasSaved
   const hasSavedMemory = content.includes('[MEMORY_SAVED]');
 
   // Remove memory tags and marker
-  let cleanContent = content
+  const cleanContent = content
     .replace(/<memory>[\s\S]*?<\/memory>/gi, '') // Remove memory tags
     .replace(/<(reason|think)>[\s\S]*?<\/\1>/gi, '') // Remove reasoning/thinking tags
     .replace(/\[MEMORY_SAVED\]/g, '') // Remove marker
@@ -93,7 +96,6 @@ function AIMessageComponent({
   onAnimationComplete,
   currentPersona = 'default',
   previousMessage = null,
-  isStreaming = false,
   audioUrl,
   isStreamingActive = false,
   loadingPhase,
@@ -211,40 +213,40 @@ function AIMessageComponent({
 
   // Memoize MarkdownComponents to prevent re-creating on every render
   // This is critical to prevent GeneratedImage from re-mounting on parent re-renders
-  const MarkdownComponents = useMemo(() => ({
-    h1: ({ children }: { children: React.ReactNode }) => (
+  const MarkdownComponents = useMemo<Components>(() => ({
+    h1: ({ children }: { children?: React.ReactNode }) => (
       <h1 className={`text-2xl font-bold mt-6 mb-4 ${theme.text}`}>{children}</h1>
     ),
-    h2: ({ children }: { children: React.ReactNode }) => (
+    h2: ({ children }: { children?: React.ReactNode }) => (
       <h2 className={`text-xl font-bold mt-5 mb-3 ${theme.text}`}>{children}</h2>
     ),
-    h3: ({ children }: { children: React.ReactNode }) => (
+    h3: ({ children }: { children?: React.ReactNode }) => (
       <h3 className={`text-lg font-bold mt-4 mb-2 ${theme.text}`}>{children}</h3>
     ),
-    p: ({ children }: { children: React.ReactNode }) => (
+    p: ({ children }: { children?: React.ReactNode }) => (
       <p className={`mb-4 leading-relaxed ${theme.text}`}>{children}</p>
     ),
-    strong: ({ children }: { children: React.ReactNode }) => (
+    strong: ({ children }: { children?: React.ReactNode }) => (
       <strong className={`font-bold ${personaColor}`}>{children}</strong>
     ),
-    em: ({ children }: { children: React.ReactNode }) => (
+    em: ({ children }: { children?: React.ReactNode }) => (
       <em className={`italic opacity-80 ${theme.text}`}>{children}</em>
     ),
-    ul: ({ children }: { children: React.ReactNode }) => (
+    ul: ({ children }: { children?: React.ReactNode }) => (
       <ul className="list-disc ml-4 mb-4 space-y-2">{children}</ul>
     ),
-    ol: ({ children }: { children: React.ReactNode }) => (
+    ol: ({ children }: { children?: React.ReactNode }) => (
       <ol className="list-decimal ml-4 mb-4 space-y-2">{children}</ol>
     ),
-    li: ({ children }: { children: React.ReactNode }) => (
+    li: ({ children }: { children?: React.ReactNode }) => (
       <li className={`leading-relaxed ${theme.text}`}>{children}</li>
     ),
-    blockquote: ({ children }: { children: React.ReactNode }) => (
+    blockquote: ({ children }: { children?: React.ReactNode }) => (
       <blockquote className={`border-l-4 border-purple-500/50 pl-4 my-4 italic opacity-70 ${theme.text}`}>
         {children}
       </blockquote>
     ),
-    code: ({ className, children }: { className?: string; children: React.ReactNode }) => {
+    code: ({ className, children }: { className?: string; children?: React.ReactNode }) => {
       // Inline code only — block code is handled by the pre component
       if (className) return <code className={className}>{children}</code>;
       return (
@@ -253,7 +255,7 @@ function AIMessageComponent({
         </code>
       );
     },
-    pre: ({ children }: { children: React.ReactNode }) => {
+    pre: ({ children }: { children?: React.ReactNode }) => {
       // Extract language and code from the child <code> element
       const child = React.Children.toArray(children)[0] as React.ReactElement<{
         className?: string;
@@ -318,47 +320,47 @@ function AIMessageComponent({
   }), [theme.text, personaColor, displayPersona]);
 
   // Dedicated components for reasoning content to keep everything consistently grey/zinc-styled
-  const ReasoningMarkdownComponents = useMemo(() => ({
-    h1: ({ children }: { children: React.ReactNode }) => (
+  const ReasoningMarkdownComponents = useMemo<Components>(() => ({
+    h1: ({ children }: { children?: React.ReactNode }) => (
       <h1 className="text-base font-bold mt-3 mb-2 text-zinc-300">{children}</h1>
     ),
-    h2: ({ children }: { children: React.ReactNode }) => (
+    h2: ({ children }: { children?: React.ReactNode }) => (
       <h2 className="text-sm font-bold mt-2.5 mb-2 text-zinc-300">{children}</h2>
     ),
-    h3: ({ children }: { children: React.ReactNode }) => (
+    h3: ({ children }: { children?: React.ReactNode }) => (
       <h3 className="text-sm font-semibold mt-2 mb-1.5 text-zinc-300">{children}</h3>
     ),
-    p: ({ children }: { children: React.ReactNode }) => (
+    p: ({ children }: { children?: React.ReactNode }) => (
       <p className="mb-3 leading-relaxed text-zinc-400">{children}</p>
     ),
-    strong: ({ children }: { children: React.ReactNode }) => (
+    strong: ({ children }: { children?: React.ReactNode }) => (
       <strong className="font-bold text-zinc-300">{children}</strong>
     ),
-    em: ({ children }: { children: React.ReactNode }) => (
+    em: ({ children }: { children?: React.ReactNode }) => (
       <em className="italic text-zinc-400/80">{children}</em>
     ),
-    ul: ({ children }: { children: React.ReactNode }) => (
+    ul: ({ children }: { children?: React.ReactNode }) => (
       <ul className="list-disc ml-4 mb-3 space-y-1.5 text-zinc-400">{children}</ul>
     ),
-    ol: ({ children }: { children: React.ReactNode }) => (
+    ol: ({ children }: { children?: React.ReactNode }) => (
       <ol className="list-decimal ml-4 mb-3 space-y-1.5 text-zinc-400">{children}</ol>
     ),
-    li: ({ children }: { children: React.ReactNode }) => (
+    li: ({ children }: { children?: React.ReactNode }) => (
       <li className="leading-relaxed text-zinc-400">{children}</li>
     ),
-    blockquote: ({ children }: { children: React.ReactNode }) => (
+    blockquote: ({ children }: { children?: React.ReactNode }) => (
       <blockquote className="border-l-4 border-zinc-600 pl-4 my-3 italic text-zinc-500">
         {children}
       </blockquote>
     ),
-    code: ({ className, children }: { className?: string; children: React.ReactNode }) => {
+    code: ({ children }: { className?: string; children?: React.ReactNode }) => {
       return (
         <code className="bg-white/10 rounded px-1.5 py-0.5 text-xs font-mono text-zinc-300">
           {children}
         </code>
       );
     },
-    pre: ({ children }: { children: React.ReactNode }) => {
+    pre: ({ children }: { children?: React.ReactNode }) => {
       return (
         <pre className="bg-white/5 rounded-lg p-3 mb-3 overflow-x-auto font-mono text-xs text-zinc-400 border border-white/5">
           {children}

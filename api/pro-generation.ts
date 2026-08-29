@@ -25,6 +25,7 @@ import {
   getProJobByRunId,
 } from './_lib/proJobs.js';
 import type { ProGenerationPayload } from '../trigger/proGeneration.js';
+import { proGenerationBodySchema, parseOrReject, rejectIfTooLarge } from './_lib/validation.js';
 
 // ─── TimeMachine PRO: background generation entry point ─────────────────────
 // POST /api/pro-generation  → validates quota, builds the full prompt/messages
@@ -36,9 +37,14 @@ import type { ProGenerationPayload } from '../trigger/proGeneration.js';
 const personaConfig = AI_PERSONAS.pro;
 
 async function handlePost(req: VercelRequest, res: VercelResponse) {
+  // Bound every input before starting a paid background run (1.8).
+  if (rejectIfTooLarge(req, res)) return;
+  const body = parseOrReject(res, proGenerationBodySchema, req.body ?? {});
+  if (!body) return;
+
   const {
     messages,
-    heatLevel = 2,
+    heatLevel,
     imageData,
     inputImageUrls,
     imageDimensions,
@@ -48,11 +54,7 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     pdfFileName,
     pdfExtractedText,
     chatSessionId,
-  } = req.body ?? {};
-
-  if (!messages || !Array.isArray(messages)) {
-    return res.status(400).json({ error: 'Invalid messages format' });
-  }
+  } = body;
 
   // Identify the user from the Supabase access token (falls back to anonymous)
   const authUser = await getAuthenticatedRequestUser(req);
@@ -154,7 +156,7 @@ ${thinkingDirective}`;
   }
 
   // Build apiMessages (pro always uses a system prompt)
-  let apiMessages: any[] = [
+  const apiMessages: any[] = [
     { role: 'system', content: systemPromptToUse },
     ...toApiMessages(messages),
   ];
