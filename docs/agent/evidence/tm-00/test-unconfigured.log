@@ -1,0 +1,21 @@
+
+> vite-react-typescript-starter@0.0.0 test
+> vitest run
+
+failed to load config from /Users/tanziminfinity/timemachinechat-v0.2-main 14/vite.config.ts
+
+⎯⎯⎯⎯⎯⎯⎯ Startup Error ⎯⎯⎯⎯⎯⎯⎯⎯
+Error: Missing required Vite environment variable(s): VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY. Set them in Vercel Project Settings -> Environment Variables and redeploy.
+    at file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/.vite-temp/vite.config.ts.timestamp-1788674916940-a7b97f57f2f73.mjs:8:41
+    at loadConfigFromFile (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vite/dist/node/chunks/node.js:36977:62)
+    at async resolveConfig (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vite/dist/node/chunks/node.js:36581:22)
+    at async _createServer (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vite/dist/node/chunks/node.js:26388:65)
+    at async createViteServer (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js:8902:17)
+    at async createVitest (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js:14288:18)
+    at async prepareVitest (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js:14655:14)
+    at async startVitest (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vitest/dist/chunks/cli-api.CnMVyzaz.js:14598:14)
+    at async start (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vitest/dist/chunks/cac.uFydS1Z4.js:2340:15)
+    at async CAC.run (file:///Users/tanziminfinity/timemachinechat-v0.2-main%2014/node_modules/vitest/dist/chunks/cac.uFydS1Z4.js:2318:2)
+
+
+

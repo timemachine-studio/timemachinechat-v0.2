@@ -1,0 +1,108 @@
+
+> vite-react-typescript-starter@0.0.0 dev
+> vite --host 127.0.0.1
+
+
+  VITE v8.2.2  ready in 83 ms
+
+  ➜  Local:   http://127.0.0.1:5173/
+[vite:css][postcss] @import statements must precede all other statements (besides @charset or empty @layer) and be consecutive
+4  |  
+5  |  /* Universal Glass Kit */
+6  |  @import './stylesheet/UniversalGlassKit.css';
+   |  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+7  |  
+8  |  /* Prevent white borders on iOS */
+ALLOWED_ORIGINS is not set; only same-origin requests will be accepted.
+SUPABASE_SERVICE_ROLE_KEY is not set — falling back to the anon key. Rate limiting cannot read rate_limits under RLS and every request will 503.
+rate_limit_backend_error rate_limit_backend_error: TypeError: fetch failed
+12:09:44 PM [vite] (client) [console.error] Warning: validateDOMNesting(...): <button> cannot appear as a descendant of <button>.
+    at button
+    at div
+    at div
+    at button
+    at MotionComponent (http://127.0.0.1:5173/node_modules/.vite/deps/framer-motion.js?v=f7586056:1196:35)
+    at div
+    at div
+    at NoteSidebar (http://127.0.0.1:5173/src/components/notes/NotesPage.tsx:3088:24)
+    at div
+    at div
+    at MotionComponent (http://127.0.0.1:5173/node_modules/.vite/deps/framer-motion.js?v=f7586056:1196:35)
+    at div
+    at div
+    at div
+    at NotesPage (http://127.0.0.1:5173/src/components/notes/NotesPage.tsx:3327:19)
+    at RenderedRoute (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4156:26)
+    at Routes (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4836:19)
+    at AppContent (http://127.0.0.1:5173/src/App.tsx:1534:20)
+    at AuthProvider (http://127.0.0.1:5173/src/context/AuthContext.tsx:64:32)
+    at AppWithAuth
+    at ThemeProvider (http://127.0.0.1:5173/src/context/ThemeContext.tsx:21:33)
+    at App
+    at Router (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4788:29)
+    at BrowserRouter (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:7234:26)
+    at _HelmetProvider (http://127.0.0.1:5173/node_modules/.vite/deps/react-helmet-async.js?v=b34a64a4:493:3)
+    at ErrorBoundary (http://127.0.0.1:5173/src/components/ErrorBoundary.tsx:10:8)
+12:10:01 PM [vite] (client) [console.error] Warning: validateDOMNesting(...): <button> cannot appear as a descendant of <button>.
+    at button
+    at div
+    at div
+    at button
+    at MotionComponent (http://127.0.0.1:5173/node_modules/.vite/deps/framer-motion.js?v=f7586056:1196:35)
+    at div
+    at div
+    at NoteSidebar (http://127.0.0.1:5173/src/components/notes/NotesPage.tsx:3088:24)
+    at div
+    at div
+    at MotionComponent (http://127.0.0.1:5173/node_modules/.vite/deps/framer-motion.js?v=f7586056:1196:35)
+    at div
+    at div
+    at div
+    at NotesPage (http://127.0.0.1:5173/src/components/notes/NotesPage.tsx:3327:19)
+    at RenderedRoute (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4156:26)
+    at Routes (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4836:19)
+    at AppContent (http://127.0.0.1:5173/src/App.tsx:1534:20)
+    at AuthProvider (http://127.0.0.1:5173/src/context/AuthContext.tsx:64:32)
+    at AppWithAuth
+    at ThemeProvider (http://127.0.0.1:5173/src/context/ThemeContext.tsx:21:33)
+    at App
+    at Router (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4788:29)
+    at BrowserRouter (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:7234:26)
+    at _HelmetProvider (http://127.0.0.1:5173/node_modules/.vite/deps/react-helmet-async.js?v=b34a64a4:493:3)
+    at ErrorBoundary (http://127.0.0.1:5173/src/components/ErrorBoundary.tsx:10:8)
+rate_limit_backend_error rate_limit_backend_error: TypeError: fetch failed
+12:10:33 PM [vite] (client) [console.error] Failed to load Flight Controls: {"message":"TypeError: Failed to fetch","details":"TypeError: Failed to fetch\n    at http://127.0.0.1:5173/node_modules/.vite/deps/@supabase_supabase-js.js?v=b081d6e8:20510:22\n    at http://127.0.0.1:5173/node_modules/.vite/deps/@supabase_supabase-js.js?v=b081d6e8:20560:10\n    at async executeWithRetry (http://127.0.0.1:5173/node_modules/.vite/deps/@supabase_supabase-js.js?v=b081d6e8:702:14)\n    at async getFlightControls (http://127.0.0.1:5173/src/services/flightControls/flightControlsService.ts:15:49)\n    at async http://127.0.0.1:5173/src/components/agents/AgentsModal.tsx:32:13","hint":"","code":""}
+12:11:11 PM [vite] (client) [console.error] Warning: validateDOMNesting(...): <button> cannot appear as a descendant of <button>.
+    at button
+    at div
+    at div
+    at button
+    at MotionComponent (http://127.0.0.1:5173/node_modules/.vite/deps/framer-motion.js?v=f7586056:1196:35)
+    at div
+    at div
+    at NoteSidebar (http://127.0.0.1:5173/src/components/notes/NotesPage.tsx:3088:24)
+    at div
+    at div
+    at MotionComponent (http://127.0.0.1:5173/node_modules/.vite/deps/framer-motion.js?v=f7586056:1196:35)
+    at div
+    at div
+    at div
+    at NotesPage (http://127.0.0.1:5173/src/components/notes/NotesPage.tsx:3327:19)
+    at RenderedRoute (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4156:26)
+    at Routes (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4836:19)
+    at AppContent (http://127.0.0.1:5173/src/App.tsx:1534:20)
+    at AuthProvider (http://127.0.0.1:5173/src/context/AuthContext.tsx:64:32)
+    at AppWithAuth
+    at ThemeProvider (http://127.0.0.1:5173/src/context/ThemeContext.tsx:21:33)
+    at App
+    at Router (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:4788:29)
+    at BrowserRouter (http://127.0.0.1:5173/node_modules/.vite/deps/react-router-dom.js?v=a8da293c:7234:26)
+    at _HelmetProvider (http://127.0.0.1:5173/node_modules/.vite/deps/react-helmet-async.js?v=b34a64a4:493:3)
+    at ErrorBoundary (http://127.0.0.1:5173/src/components/ErrorBoundary.tsx:10:8)
+rate_limit_backend_error rate_limit_backend_error: TypeError: fetch failed
+12:11:37 PM [vite] (client) [console.error] AI proxy request failed: Origin not allowed
+12:11:37 PM [vite] (client) [console.error] Failed to generate streaming response: Origin not allowed
+rate_limit_backend_error rate_limit_backend_error: TypeError: fetch failed
+rate_limit_backend_error rate_limit_backend_error: TypeError: fetch failed
+rate_limit_backend_error rate_limit_backend_error: TypeError: fetch failed
+12:17:22 PM [vite] (client) [console.error] Failed to load Flight Controls: {"message":"TypeError: Failed to fetch","details":"TypeError: Failed to fetch\n    at http://127.0.0.1:5173/node_modules/.vite/deps/@supabase_supabase-js.js?v=b081d6e8:20510:22\n    at http://127.0.0.1:5173/node_modules/.vite/deps/@supabase_supabase-js.js?v=b081d6e8:20560:10\n    at async executeWithRetry (http://127.0.0.1:5173/node_modules/.vite/deps/@supabase_supabase-js.js?v=b081d6e8:702:14)\n    at async getFlightControls (http://127.0.0.1:5173/src/services/flightControls/flightControlsService.ts:15:49)\n    at async http://127.0.0.1:5173/src/components/agents/AgentsModal.tsx:32:13","hint":"","code":""}

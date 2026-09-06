@@ -5,6 +5,15 @@
 
 ---
 
+## TM-00 baseline update (2026-09-06)
+
+The current source and local verification are recorded in [docs/agent/baseline.md](docs/agent/baseline.md). No product code or production gate was completed by this update. Historical diagnostics below describe their original audits, not current deployment evidence.
+
+- Node 22.19.0; locked `npm ci` succeeds. Typecheck: 0 errors. Lint: 136 errors + 5 warnings (141 total). Unit tests: 24 passing in 3 files. Build passes with fixture public configuration; CSS import-order and bundle-size warnings remain. Without the two required public Supabase variables, tests/build stop during Vite config loading.
+- Database types are handwritten and declare **21 tables**, not 22. Five migration files create five tables; 17 typed tables lack creation SQL there. `pdf_chunks` has migration SQL but no type declaration. No live schema/RLS audit or fresh-database reconstruction passed; 1.2's generation follow-up and 2.2/2.6 remain outstanding.
+- Gate LS is superseded only where it conflicts with `superplan.md` D1: free personal history is device-only; paid personal history also defaults to device storage and may sync only after verified entitlement plus explicit opt-in. This target is not implemented today. Do not follow older blanket no-sync, no-migration, or table-drop instructions. Preserve legacy cloud data pending verified export/import and the paid adapter.
+- The overlap map in the baseline assigns storage to TM-02/05/06/07/15/28, provider extraction to TM-08/09, and evaluation/release to TM-14/29/30. Avoid implementing these twice under different task numbers.
+
 ## ✅ Remaining work — the running tracker
 
 **Last updated:** 2026-08-27 · **Gate 0:** code complete, pending one manual step. · **Gate 1:** complete.
@@ -44,7 +53,7 @@ These are not code. They block launch and none of them can be handed to an agent
 | 1.14 | Render the app shell immediately | ✅ FCP 184ms with auth deliberately hung |
 | 1.11 | Timeout, backoff, queue | ✅ 50 concurrent: 0 silent failures, 0 hangs, spread 9× → 2.2× (fallback chain unverified locally — see note) |
 | 1.13 | Fix stale closures in `useChat` | ✅ `exhaustive-deps` = error, all 24 repo-wide violations fixed |
-| 1.2 → 1.1 | Regenerate DB types, then fix the TS errors | ✅ 22 tables typed; 155 → 0 errors; build gated on `tsc` |
+| 1.2 → 1.1 | Regenerate DB types, then fix the TS errors | ✅ 21 handwritten tables; 0 TS errors; build gated on `tsc`. Live type generation pending (TM-00). |
 | 1.3 | Error boundary | ✅ root + transcript-scoped, both verified with deliberate throws |
 | 1.4 | 404 route | ✅ verified live |
 | 1.5 | Abort, timeout, retry on AI requests | ✅ Stop button, 60s/180s budgets, backoff+jitter |
@@ -547,7 +556,7 @@ The `'never'` errors are the dangerous ones — they mean the code queries Supab
 
 ### 1.2 — Regenerate database types ✅
 
-> **Done 2026-08-27.** `src/types/database.ts` now declares all 22 tables the code queries (the 9 that were missing, plus the pre-existing ones). Every `on type 'never'` error is gone.
+> **Type coverage fixed 2026-08-27; live generation still pending.** TM-00 confirms 21 handwritten table declarations and 0 TypeScript errors. This is not output from `supabase gen types` and does not verify the deployed schema or RLS. See the baseline prerequisite list.
 
 **Severity:** High · **Effort:** S · **Files:** `src/types/database.ts`
 
@@ -930,7 +939,7 @@ Combined with route-level code splitting (3.1), target **first paint under 1s** 
 
 # GATE LS — Local-first message storage
 
-> **Product decision (owner):** chat messages are stored **on-device only**. No cloud sync, no migration path. Privacy is the headline feature.
+> **Updated owner decision, 2026-09-06:** `superplan.md` D1 governs personal history: free users are device-only; paid users are device-only by default and can opt into cloud sync only with verified entitlement and explicit consent. The older no-sync/no-migration and table-drop directions in LS.1–LS.6 are superseded where they conflict. Existing signed-in cloud writes are still present and must be migrated safely. Proposed privacy wording below is historical and must not be reused without TM-02 verification.
 
 This is an architecture change, not a bug fix, so it gets its own gate. Sequence it **after** Gate 0 and alongside Gate 1 — it changes what 0.2, 0.8, and 2.2 need to do.
 
@@ -1145,7 +1154,7 @@ directly after four per-user policies — **the public rule wins, so every user'
 4. Fix the `music-assets` policy: drop the public rule, or move genuinely-public assets to a separate bucket.
 5. Stand up a **staging Supabase project** from the migrations.
 
-> **Scope note:** with Gate LS landed, `chat_sessions` and `chat_messages` get dropped (LS.3/LS.4) and possibly `ai_memories` too — so pull the schema now for the audit, but expect the table count to shrink before launch.
+> **Updated scope note (TM-00):** do not drop `chat_sessions`, `chat_messages`, or `ai_memories` under this older plan. D1 permits eligible paid opt-in history; TM-02/05/15 must settle verified legacy migration and retention first. Capture schema only from an authorized environment.
 
 **Done when** a fresh database can be built from `supabase/migrations/` alone, and every user-data table has RLS enabled with a reviewed policy.
 

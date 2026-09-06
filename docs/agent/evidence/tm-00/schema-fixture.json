@@ -1,0 +1,219 @@
+{
+  "kind": "Static source fixture, NOT a database dump or live RLS audit",
+  "captured": "2026-09-06",
+  "typed_tables": [
+    "profiles",
+    "rate_limits",
+    "chat_sessions",
+    "chat_messages",
+    "ai_memories",
+    "user_images",
+    "youtube_music",
+    "flight_control_catalog",
+    "user_flight_control_settings",
+    "mcp_tool_runs",
+    "manufacturers",
+    "pregnancy_categories",
+    "generics",
+    "brands",
+    "group_chats",
+    "group_chat_participants",
+    "group_chat_messages",
+    "user_music",
+    "contact_messages",
+    "kitchen_recipes",
+    "pro_generation_jobs"
+  ],
+  "sql_created_tables_by_file": {
+    "supabase/migrations/flight_controls.sql": [
+      "flight_control_catalog",
+      "user_flight_control_settings",
+      "mcp_tool_runs"
+    ],
+    "supabase/migrations/healthcare_search.sql": [],
+    "supabase/migrations/pdf_chunks.sql": [
+      "pdf_chunks"
+    ],
+    "supabase/migrations/pro_generation_jobs.sql": [
+      "pro_generation_jobs"
+    ],
+    "supabase/migrations/rate_limits_rls.sql": [],
+    "supabase/music_setup.sql": [
+      "user_music"
+    ]
+  },
+  "typed_tables_without_create_in_migrations": [
+    "ai_memories",
+    "brands",
+    "chat_messages",
+    "chat_sessions",
+    "contact_messages",
+    "generics",
+    "group_chat_messages",
+    "group_chat_participants",
+    "group_chats",
+    "kitchen_recipes",
+    "manufacturers",
+    "pregnancy_categories",
+    "profiles",
+    "rate_limits",
+    "user_images",
+    "user_music",
+    "youtube_music"
+  ],
+  "migration_created_tables_without_types": [
+    "pdf_chunks"
+  ],
+  "literal_from_calls_including_storage_buckets": {
+    "profiles": [
+      "src/context/ThemeContext.tsx",
+      "src/context/ThemeContext.tsx",
+      "src/context/ThemeContext.tsx",
+      "src/context/AuthContext.tsx",
+      "src/context/AuthContext.tsx",
+      "src/context/AuthContext.tsx",
+      "src/context/AuthContext.tsx",
+      "api/delete-account.ts",
+      "api/ai-proxy.ts"
+    ],
+    "user-images": [
+      "src/lib/supabase.ts",
+      "src/lib/supabase.ts",
+      "src/services/image/imageService.ts"
+    ],
+    "music-assets": [
+      "src/services/music/musicService.ts",
+      "src/services/music/musicService.ts",
+      "src/services/music/musicService.ts",
+      "src/services/music/musicService.ts"
+    ],
+    "user_music": [
+      "src/services/music/musicService.ts"
+    ],
+    "ai_memories": [
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/services/memory/memoryService.ts",
+      "src/components/auth/AccountPage.tsx",
+      "api/ai-proxy.ts",
+      "api/ai-proxy.ts"
+    ],
+    "chat_sessions": [
+      "src/services/chat/chatService.ts",
+      "src/services/chat/chatService.ts",
+      "src/services/chat/chatService.ts",
+      "src/services/chat/chatService.ts",
+      "src/components/auth/AccountPage.tsx"
+    ],
+    "chat_messages": [
+      "src/services/chat/chatService.ts",
+      "src/services/chat/chatService.ts",
+      "src/services/chat/chatService.ts",
+      "src/services/chat/chatService.ts",
+      "src/components/auth/AccountPage.tsx"
+    ],
+    "group_chat_participants": [
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/components/groupchat/GroupSettingsPage.tsx",
+      "src/components/groupchat/GroupSettingsPage.tsx"
+    ],
+    "group_chats": [
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/components/groupchat/GroupSettingsPage.tsx"
+    ],
+    "group_chat_messages": [
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts",
+      "src/services/groupChat/groupChatService.ts"
+    ],
+    "brands": [
+      "src/services/healthcare/healthcareService.ts",
+      "src/services/healthcare/healthcareService.ts",
+      "src/services/healthcare/healthcareService.ts",
+      "src/services/healthcare/healthcareService.ts",
+      "src/services/healthcare/healthcareService.ts",
+      "src/services/healthcare/healthcareService.ts",
+      "api/ai-proxy.ts",
+      "api/ai-proxy.ts"
+    ],
+    "generics": [
+      "src/services/healthcare/healthcareService.ts",
+      "src/services/healthcare/healthcareService.ts",
+      "src/services/healthcare/healthcareService.ts",
+      "src/services/healthcare/healthcareService.ts",
+      "api/ai-proxy.ts",
+      "api/ai-proxy.ts"
+    ],
+    "user_images": [
+      "src/services/image/imageService.ts",
+      "src/services/image/imageService.ts",
+      "src/services/image/imageService.ts",
+      "src/components/auth/AccountPage.tsx"
+    ],
+    "flight_control_catalog": [
+      "src/services/flightControls/flightControlsService.ts",
+      "api/_lib/flightControls.ts"
+    ],
+    "user_flight_control_settings": [
+      "src/services/flightControls/flightControlsService.ts",
+      "src/services/flightControls/flightControlsService.ts",
+      "api/_lib/flightControls.ts"
+    ],
+    "contact_messages": [
+      "src/components/contact/ContactPage.tsx"
+    ],
+    "kitchen_recipes": [
+      "src/components/lifestyle/CookBookPage.tsx"
+    ],
+    "rate_limits": [
+      "api/ai-proxy.ts",
+      "api/ai-proxy.ts",
+      "api/ai-proxy.ts",
+      "api/ai-proxy.ts"
+    ],
+    "mcp_tool_runs": [
+      "api/mcp-approval.ts",
+      "api/mcp-approval.ts",
+      "api/mcp-approval.ts",
+      "api/mcp-approval.ts",
+      "api/mcp-approval.ts",
+      "api/_lib/flightControls.ts",
+      "api/_lib/flightControls.ts"
+    ],
+    "pro_generation_jobs": [
+      "api/_lib/proJobs.ts",
+      "api/_lib/proJobs.ts",
+      "api/_lib/proJobs.ts",
+      "api/_lib/proJobs.ts",
+      "api/_lib/proJobs.ts",
+      "api/_lib/proJobs.ts"
+    ]
+  }
+}
