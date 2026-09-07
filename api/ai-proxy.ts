@@ -902,10 +902,13 @@ async function getUserRateLimit(userId: string | null, persona: string): Promise
 }
 
 export type RateLimitOutcome =
-  | { allowed: true }
+  // `providers` is the requested chain minus anything at its daily ceiling —
+  // the whole chain when no ceiling is configured. Empty only when the caller
+  // named no providers at all.
+  | { allowed: true; providers: string[] }
   | { allowed: false; reason: 'limit'; limit: number }
   | { allowed: false; reason: 'backend_error' }
-  | { allowed: false; reason: 'spend_ceiling'; provider: string };
+  | { allowed: false; reason: 'spend_ceiling'; providers: string[] };
 
 // Reserved bucket keys in the rate_limits table. Real personas are lowercase
 // identifiers, so a '__' prefix cannot collide with one.
@@ -939,19 +942,32 @@ async function readBucketCount(
  * Daily ceiling on total generations per provider. A hard stop that protects
  * the card when something (a leak, a bug, a bot) drives volume past anything
  * a real user population would produce. 0 / unset disables the ceiling.
+ *
+ * Returns the subset of `providers` still under their ceiling, in the order
+ * given. This is per *provider*, not per run: one provider hitting its cap
+ * means the run skips that provider, not that the app stops answering. The
+ * previous version checked only the primary and refused the whole turn on it,
+ * which — now that Air has a fallback chain — took two healthy providers down
+ * with the capped one.
  */
-async function checkProviderSpendCeiling(provider: string): Promise<boolean> {
+async function providersUnderCeiling(providers: string[]): Promise<string[]> {
   const ceiling = parseInt(process.env.PROVIDER_DAILY_CEILING || '0', 10);
-  if (!ceiling || Number.isNaN(ceiling)) return true;
+  if (!ceiling || Number.isNaN(ceiling)) return providers;
 
-  const used = await readBucketCount(`${PROVIDER_BUCKET_PREFIX}${provider}`, { ip: GLOBAL_BUCKET_IP });
-  if (used >= ceiling) {
-    console.error(
-      `provider_spend_ceiling_reached provider=${provider} used=${used} ceiling=${ceiling}`,
-    );
-    return false;
+  const verdicts = await Promise.all(providers.map(async (provider) => {
+    const used = await readBucketCount(`${PROVIDER_BUCKET_PREFIX}${provider}`, { ip: GLOBAL_BUCKET_IP });
+    if (used >= ceiling) {
+      console.warn(`provider_spend_ceiling_reached provider=${provider} used=${used} ceiling=${ceiling}`);
+      return null;
+    }
+    return provider;
+  }));
+
+  const open = verdicts.filter((provider): provider is string => provider !== null);
+  if (open.length === 0 && providers.length > 0) {
+    console.error(`provider_spend_ceiling_reached_all providers=${providers.join(',')} ceiling=${ceiling}`);
   }
-  return true;
+  return open;
 }
 
 /**
@@ -997,17 +1013,23 @@ export async function checkRateLimit(
   userId: string | null,
   ip: string,
   persona: string,
-  options: { anonymousDeviceId?: string | null; provider?: string } = {},
+  options: { anonymousDeviceId?: string | null; providers?: string[] } = {},
 ): Promise<RateLimitOutcome> {
   try {
-    if (options.provider && !(await checkProviderSpendCeiling(options.provider))) {
-      return { allowed: false, reason: 'spend_ceiling', provider: options.provider };
+    // Only a run with nowhere left to go is refused here. A single capped
+    // provider just drops out of the chain.
+    const requested = options.providers ?? [];
+    const open = requested.length > 0 ? await providersUnderCeiling(requested) : [];
+    if (requested.length > 0 && open.length === 0) {
+      return { allowed: false, reason: 'spend_ceiling', providers: requested };
     }
 
     if (userId) {
       const limit = await getUserRateLimit(userId, persona);
       const used = await readBucketCount(persona, { userId });
-      return used < limit ? { allowed: true } : { allowed: false, reason: 'limit', limit };
+      return used < limit
+        ? { allowed: true, providers: open }
+        : { allowed: false, reason: 'limit', limit };
     }
 
     // Anonymous: enforce the same number the UI advertises, server-side.
@@ -1022,7 +1044,7 @@ export async function checkRateLimit(
       if (deviceUsed >= limit) return { allowed: false, reason: 'limit', limit };
     }
 
-    return { allowed: true };
+    return { allowed: true, providers: open };
   } catch (error) {
     // Deliberately fail closed. This log line is the signal that the limiter
     // backend is down — alert on it (production-check.md 2.1).
@@ -2275,6 +2297,17 @@ export function buildProviderChain(
   return chain.length > 0 ? chain : [{ provider, model }];
 }
 
+/**
+ * Every provider a run may touch, primary first.
+ *
+ * The spend ceiling needs this before a model is resolved, so it works in
+ * provider names rather than full hops.
+ */
+export function runProviderNames(provider: string, personaConfig: unknown): string[] {
+  const names = [provider, ...personaFallbacks(personaConfig).map(hop => hop.provider)];
+  return [...new Set(names.filter(name => STREAMING_PROVIDERS.has(name)))];
+}
+
 /** The declared fallbacks for a persona, if it has any. */
 export function personaFallbacks(personaConfig: unknown): ProviderHop[] {
   const declared = (personaConfig as { fallbacks?: unknown })?.fallbacks;
@@ -2396,7 +2429,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const provider = resolveRunProvider(persona, personaConfig as PersonaProviderConfig, !!flowState);
 
     // Check rate limit (using Supabase). Fails closed.
-    const limitOutcome = await checkRateLimit(userId, ip, persona, { anonymousDeviceId, provider });
+    const runProviders = runProviderNames(provider, personaConfig);
+    const limitOutcome = await checkRateLimit(userId, ip, persona, { anonymousDeviceId, providers: runProviders });
     if (!limitOutcome.allowed) {
       if (limitOutcome.reason === 'backend_error') {
         return res.status(503).json(
@@ -2415,6 +2449,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })
       );
     }
+
+    // Providers still under their daily ceiling, in chain order. With no
+    // ceiling configured this is the whole chain.
+    const openProviders = limitOutcome.providers;
 
     // Resolve special mode per-persona config (if active)
     // Map persona key to the 3 base personas used in special mode configs
@@ -2625,7 +2663,17 @@ ${thinkingDirective}`;
         // yields a stream or throws before a single byte reaches the client.
         // Once tokens are flowing there is no resume, so a mid-stream death
         // surfaces as truncated instead (1.9/1.11).
-        const providerChain = buildProviderChain(runProvider, runModel, personaFallbacks(personaConfig));
+        const fullChain = buildProviderChain(runProvider, runModel, personaFallbacks(personaConfig));
+        // Drop hops whose provider is out of budget for the day. With no ceiling
+        // configured openProviders holds the whole chain, so nothing is lost.
+        const providerChain = openProviders.length > 0
+          ? fullChain.filter(hop => openProviders.includes(hop.provider))
+          : fullChain;
+
+        // Which provider actually produced the turn. The ceiling used to be
+        // charged to the primary regardless, so a run served by a fallback
+        // spent the primary's budget and capped it early.
+        let servedProvider = runProvider;
 
         const loopResult = await runAgentLoop({
           messages: apiMessages,
@@ -2652,6 +2700,7 @@ ${thinkingDirective}`;
               ),
               (message) => console.log(`[${persona}] ${message}`),
             );
+            servedProvider = run.provider;
             if (run.provider !== runProvider) {
               console.warn(`[${persona}] fell back from ${runProvider} to ${run.provider}`);
             }
@@ -2674,7 +2723,7 @@ ${thinkingDirective}`;
         await incrementRateLimit(userId, ip, persona, {
           amount: quotaCost,
           anonymousDeviceId,
-          provider,
+          provider: servedProvider,
         });
 
         // Process memory tags from the full content (XML-based memory system)

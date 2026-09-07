@@ -69,8 +69,10 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Sign in to use TimeMachine PRO', type: 'authRequired' });
   }
 
+  // PRO declares no fallbacks, so its chain is the one provider.
+  const proProvider = (personaConfig as { provider?: string }).provider;
   const limitOutcome = await checkRateLimit(userId, ip, 'pro', {
-    provider: (personaConfig as { provider?: string }).provider,
+    providers: proProvider ? [proProvider] : [],
   });
   if (!limitOutcome.allowed) {
     if (limitOutcome.reason === 'backend_error' || limitOutcome.reason === 'spend_ceiling') {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AI_PERSONAS, buildProviderChain, personaFallbacks } from './ai-proxy';
+import { AI_PERSONAS, buildProviderChain, personaFallbacks, runProviderNames } from './ai-proxy';
 import {
   ProviderHttpError,
   runWithProviderFallback,
@@ -52,6 +52,34 @@ describe('Air provider chain', () => {
   it('reads no fallbacks off a persona that declares none', () => {
     expect(personaFallbacks(AI_PERSONAS.girlie)).toEqual([]);
     expect(personaFallbacks(undefined)).toEqual([]);
+  });
+});
+
+describe('runProviderNames', () => {
+  const air = AI_PERSONAS.default;
+
+  it('names every provider the spend ceiling has to consider, primary first', () => {
+    // The ceiling runs before a model is resolved, so it works in names. If it
+    // saw only the primary it would refuse a turn two healthy providers could
+    // have served.
+    expect(runProviderNames(air.provider, air)).toEqual([
+      air.provider,
+      ...personaFallbacks(air).map(hop => hop.provider),
+    ]);
+  });
+
+  it('is just the primary for a persona with no fallbacks', () => {
+    expect(runProviderNames('pollinations', AI_PERSONAS.pro)).toEqual(['pollinations']);
+  });
+
+  it('drops unknown names and repeats', () => {
+    expect(runProviderNames('groq', {
+      fallbacks: [
+        { provider: 'groq', model: 'other' },
+        { provider: 'nope', model: 'x' },
+        { provider: 'nvidia', model: 'y' },
+      ],
+    })).toEqual(['groq', 'nvidia']);
   });
 });
 
