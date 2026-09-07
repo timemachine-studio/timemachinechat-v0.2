@@ -1,6 +1,6 @@
 # TimeMachine: the everything AI implementation plan
 
-Status: TM-00 local/source baseline complete (2026-09-06); product implementation has not started. Live schema/service checks remain environment prerequisites. Product decisions include the owner's follow-up on free and paid history storage.
+Status: TM-00 local/source baseline and TM-01 shared contracts complete (2026-09-06); runtime/storage rollout has not started. Live schema/service checks remain environment prerequisites. Product decisions include the owner's follow-up on free and paid history storage.
 
 Prepared: 2026-09-06. Audience: Codex agents implementing this repository, and the TM team reviewing releases.
 
@@ -398,7 +398,7 @@ Done when: there is a verified baseline with commands/results, a storage data-fl
 
 #### TM-01 — Introduce shared contracts
 
-- [ ] Complete. Depends on: TM-00.
+- [x] Complete. Depends on: TM-00. Verified 2026-09-06; see [contract decisions and evidence](docs/agent/contracts.md).
 - Files: new `shared/agent/*`, `shared/apps/*`; relevant TypeScript configs; `src/types/chat.ts` compatibility types.
 
 Steps:
@@ -412,7 +412,7 @@ Done when: client/server import the same validated contracts; no general `any` t
 
 #### TM-02 — Set processing retention and storage lifecycle
 
-- [ ] Complete. Depends on: TM-00, TM-01.
+- [ ] Complete. Depends on: TM-00, TM-01. Local implementation verified 2026-09-07; blocked on actual service retention/deletion verification. See [lifecycle inventory and exact remaining checks](docs/agent/data-lifecycle.md).
 - Files: `docs/agent/data-lifecycle.md`, `api/_lib/proJobs.ts`, Trigger configuration/payload boundaries, legal/auth copy only where facts are settled.
 
 Steps:
@@ -946,7 +946,7 @@ Targets are planning choices and can be changed with recorded evidence. Security
 
 ## 12. Instructions for the next Codex agent
 
-TM-00 is complete as a local/source baseline; the next eligible task is TM-01. Read `codex.md`, `status.md`, and `docs/agent/baseline.md` first. Do not implement the entire document at once, and do not substitute a planning-only change for an implementation task assigned later.
+TM-00 is complete as a local/source baseline and TM-01 shared contracts are verified; TM-02 now has local controls but remains incomplete pending service verification. Resume TM-02 before its dependent tasks. Read `codex.md`, `status.md`, and `docs/agent/baseline.md` first. Do not implement the entire document at once, and do not substitute a planning-only change for an implementation task assigned later.
 
 For each task:
 
@@ -977,6 +977,9 @@ Do not commit, push, purchase infrastructure, or deploy without authorization.
 | --- | --- | --- | --- |
 | Planning | Complete | Owner requirements and paid opt-in history decision captured; repository inspected; architecture references checked. No application code, schema, billing, or deployment changed. | TM-00 |
 | TM-00 | Complete: local/source baseline, 2026-09-06 | [Baseline and evidence](docs/agent/baseline.md): no dependencies; locked install; typecheck 0 errors; lint 136 existing errors + 5 warnings; 24 unit tests and build pass with public fixture env (unconfigured test/build fail). Storage map, static schema fixture, 10 desktop/mobile references plus failure/history captures, Notes/history reload observations, corrected architecture and Gate LS D1 exception; `codex.md` / `status.md` added. No product files changed. Step 3 fallback used: no authorized staging credentials, so live schema/RLS, auth, provider, Trigger and MCP verification remain prerequisites, not passing tests. No next-task implementation. | TM-01 |
+| TM-01 | Complete: shared contracts, 2026-09-06 | [Contracts and verification](docs/agent/contracts.md): TM-00 dependency checked; shared strict schemas, version rejection, canonical SHA-256 arguments, opaque execution context, local/cloud repository and executor interfaces, client/server compatibility exports and explicit TS inclusion. 61 tests pass (37 new deterministic contract cases); typecheck/build pass; lint unchanged at 136 errors + 5 warnings. Browser chat/Notes navigation and baseline note reload verified. No live runtime migration or service-integration claim. | TM-02; TM-04/TM-08 also dependency-eligible, not started |
+| TM-02 | Incomplete: local controls implemented, live verification blocked (2026-09-07) | [Lifecycle inventory, migration protocol and evidence](docs/agent/data-lifecycle.md). TM-00/TM-01 dependencies verified. Durable PRO dispatch/worker gates, recovery expiry, protected disabled-by-default processing cleanup, account-deletion failure handling, media no-store/content-log removal and truthful privacy/signup copy. 90 tests pass (23 retention + 6 history-validation additions since TM-01), typecheck/build pass; separately authorized lint cleanup reaches 0 errors and 0 warnings. Live Trigger read-only authentication works without a project reference. Supabase rejects the configured public key (401 / Invalid API key); actual settings, deployed RLS/cleanup, processor/backups/log deletion and staging account UI remain unverified. No cloud purge or deployment performed. | Resume TM-02; no next task started |
+| Owner-requested lint cleanup | Complete: 2026-09-07 | Removed 136 errors and 5 warnings without weakening rules. Typed provider messages/tools/requests, database joins/JSON boundaries, YouTube/browser APIs and caught errors; split React context and icon/menu exports into refresh-safe modules. Six synthetic history validation tests cover retry/attachment preservation, legacy IDs and malformed input. 90 total tests, typecheck, lint and build pass. Browser signup/privacy and guest import/reopen checks pass; [verification and remaining rough edges](docs/agent/data-lifecycle.md#verification-and-exact-blockers). | Resume TM-02 external verification; no next roadmap task started |
 
 ### Architecture choices to keep explicit during implementation
 
