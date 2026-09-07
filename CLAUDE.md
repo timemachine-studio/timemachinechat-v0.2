@@ -128,7 +128,8 @@ Server (never `VITE_`-prefixed):
 12. **Message IDs are `Date.now()`** (and `Date.now() + 1` for AI placeholders). They collide. `key={message.id}` means colliding IDs make messages merge or vanish. Being replaced with `crypto.randomUUID()` in 1.12.
 13. **`useChat.ts` has 8 `exhaustive-deps` violations.** The send handler captures a stale `currentSessionId`, so a completion can save into the previously-open session. There's a comment in `completeStreamingMessage` patching the symptom — don't add more of those, fix the closure.
 14. **The whole app blocks on auth.** `App.tsx` returns a bare spinner until `getSession()` *and* `fetchProfile()` both resolve (the latter with an 8s timeout). Being made progressive in 1.14 — don't add anything else to that gate.
-15. **`saveLocalSession` swallows `QuotaExceededError`.** All sessions are one `localStorage` JSON blob, and messages carry base64 images and full PDF text. It silently stops saving at ~5 MB. Moving to IndexedDB in LS.2.
+15. **The Trigger.dev task deploys separately from Vercel.** Merging to `main` redeploys `api/` and `src/` only. `trigger/proGeneration.ts` — where PRO's model call actually happens — stays on whatever was last shipped with `npm run trigger:deploy` (or the Trigger.dev GitHub integration, if it has been connected). A change to the task that looks live because the PR merged is not live. The task also runs on Trigger's own infrastructure with its own environment variables: a provider key set in Vercel is not visible to it. And `trigger.config.ts` pins `runtime: "node-22"` — the default `"node"` is Node 21, which has no global `WebSocket`, and the Supabase client the task imports fails the build without one.
+16. **`saveLocalSession` swallows `QuotaExceededError`.** All sessions are one `localStorage` JSON blob, and messages carry base64 images and full PDF text. It silently stops saving at ~5 MB. Moving to IndexedDB in LS.2.
 
 ## Storage direction (important)
 
