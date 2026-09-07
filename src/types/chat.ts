@@ -22,7 +22,6 @@ export interface MusicVariation {
 // Why a turn failed. Mirrors the codes the API returns in
 // `{ error: { code, message } }` so the client never has to string-match.
 export type ChatErrorCode =
-  | 'RETENTION_UNVERIFIED'
   | 'RATE_LIMITED'
   | 'AUTH_EXPIRED'
   | 'PROVIDER_DOWN'
@@ -134,6 +133,3 @@ export interface MessageProps {
   sender_avatar?: string;
   isGroupMode?: boolean;
 }
-
-// Additive compatibility names; legacy Message and wire framing stay intact.
-export type { AgentEvent, ArtifactRef, SourceRef, ToolResult } from "../../shared/agent";

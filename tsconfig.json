@@ -43,8 +43,7 @@
     "src",
     "src/pages/api",
     "api",
-    "trigger",
-    "shared"
+    "trigger"
   ],
   "exclude": [
     "node_modules",

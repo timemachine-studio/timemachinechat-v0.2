@@ -1,4 +1,3 @@
-import type { AccentTheme } from './shared';
 import React, { useState, useEffect } from 'react';
 import { Globe, ExternalLink, Loader2 } from 'lucide-react';
 import { ModuleData } from '../moduleRegistry';
@@ -7,7 +6,7 @@ export function WebViewerView({
     module,
 }: {
     module: ModuleData;
-    accent: AccentTheme;
+    accent: any;
 }) {
     const web = module.webViewer;
     const [loading, setLoading] = useState(true);

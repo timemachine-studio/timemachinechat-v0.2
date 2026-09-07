@@ -1,4 +1,3 @@
-import type { ProviderMessage } from './_lib/providerTypes.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getAuthenticatedRequestUser } from './_lib/auth.js';
 import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
@@ -113,7 +112,7 @@ Block index 2 (id: "def") is a text block.
 Response:
 {"edits":[{"blockId":"def","newContent":"Same content","newType":"heading2"}],"newBlocks":[],"message":"Converted the third block to a heading."}`;
 
-async function callCerebrasAPI(messages: ProviderMessage[]): Promise<string> {
+async function callCerebrasAPI(messages: any[]): Promise<string> {
   const CEREBRAS_API_KEY = process.env.CEREBRAS_API_KEY;
   if (!CEREBRAS_API_KEY) {
     throw new Error('CEREBRAS_API_KEY not configured');
@@ -136,7 +135,8 @@ async function callCerebrasAPI(messages: ProviderMessage[]): Promise<string> {
   });
 
   if (!response.ok) {
-    console.error('notes_provider_failed', response.status);
+    const errorText = await response.text();
+    console.error('Cerebras API Error (Notes AI):', errorText);
     throw new Error(`Cerebras API error: ${response.status}`);
   }
 
@@ -205,9 +205,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const parsed = JSON.parse(cleaned);
 
     return res.status(200).json(parsed);
-  } catch (error: unknown) {
-    void error;
-    console.error('notes_ai_failed');
+  } catch (error: any) {
+    console.error('Notes AI error:', error);
 
     // If JSON parse failed, return a friendly error
     if (error instanceof SyntaxError) {
@@ -220,7 +219,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     return res.status(500).json({
-      error: (error instanceof Error ? error.message : String(error)) || 'Internal server error',
+      error: error.message || 'Internal server error',
     });
   }
 }

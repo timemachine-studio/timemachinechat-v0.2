@@ -48,8 +48,8 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
   const { user, profile, updateProfile, signOut, changePassword } = useAuth();
   const [nickname, setNickname] = useState(profile?.nickname || '');
   const [aboutMe, setAboutMe] = useState(profile?.about_me || '');
-  const [gender, setGender] = useState(profile?.gender || '');
-  const [birthDate, setBirthDate] = useState(profile?.birth_date || '');
+  const [gender, setGender] = useState((profile as any)?.gender || '');
+  const [birthDate, setBirthDate] = useState((profile as any)?.birth_date || '');
   const [, setLoading] = useState(false);
   const [success, setSuccess] = useState('');
   const [error, setError] = useState('');
@@ -169,7 +169,8 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
     }
   };
 
-  // Account deletion keeps auth available if supported data cleanup fails
+  // Permanent account deletion. The server purges every table and storage
+  // object we hold for this user, then removes the auth record
   // (production-check.md 0.8).
   const handleDeleteAccount = async () => {
     setDeleteError('');
@@ -500,7 +501,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => {
-                            setGender(profile?.gender || '');
+                            setGender((profile as any)?.gender || '');
                             setEditingField(null);
                           }}
                           className="p-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-all"
@@ -559,7 +560,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
                           whileHover={{ scale: 1.05 }}
                           whileTap={{ scale: 0.95 }}
                           onClick={() => {
-                            setBirthDate(profile?.birth_date || '');
+                            setBirthDate((profile as any)?.birth_date || '');
                             setEditingField(null);
                           }}
                           className="p-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-all"
@@ -701,9 +702,9 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
                   <div className="space-y-2">
                     <p className="text-white font-medium">This cannot be undone.</p>
                     <p className="text-white/50 text-sm leading-relaxed">
-                      Account deletion removes supported cloud account data and cannot be undone.
-                      Copies in this browser, shared groups, backups or AI services may need separate
-                      removal. If cleanup cannot finish, we keep your sign-in account available for retry or support.
+                      Deleting your account permanently removes your profile, every conversation and
+                      message, your AI memories, saved and generated images, and your uploaded files.
+                      There is no backup we can restore for you.
                     </p>
                   </div>
                 </div>

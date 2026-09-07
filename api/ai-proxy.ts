@@ -1,7 +1,3 @@
-import type { Database } from '../src/types/database.js';
-import type { HealthcareBrand } from '../shared/healthcare.js';
-import type { ModelConfig, SpecialModeConfig } from './_lib/providerTypes.js';
-import type { ProviderMessage, ProviderTool, ProviderRequest, ProviderResponse } from './_lib/providerTypes.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
@@ -48,21 +44,21 @@ if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     'Rate limiting cannot read rate_limits under RLS and every request will 503.',
   );
 }
-const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey);
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 // AI Personas configuration
 export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
-    provider: 'groq', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-    model: 'qwen/qwen3.8-27b',
+    provider: 'nvidia', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
+    model: 'openai/gpt-oss-120b',
     temperature: 0.8,
-    maxTokens: 9304,
+    maxTokens: 26304,
     flowState: {
-      provider: 'groq',
-      model: 'openai/gpt-oss-20b',
+      provider: 'pollinations',
+      model: 'MarcosFRG/glm-5.3-flash',
       temperature: 0.8,
-      maxTokens: 9304,
+      maxTokens: 32304,
       quotaCost: 4
     },
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
@@ -477,7 +473,7 @@ export async function fetchHealthcareRAGContext(userMessage: string): Promise<st
       search_query: searchQuery,
     });
 
-    let results: Omit<Database['public']['Functions']['search_drugs']['Returns'][number], 'brand_id' | 'generic_id' | 'relevance'>[] = [];
+    let results: any[] = [];
 
     if (!rpcError && rpcData && rpcData.length > 0) {
       results = rpcData.slice(0, 3);
@@ -493,23 +489,23 @@ export async function fetchHealthcareRAGContext(userMessage: string): Promise<st
       `;
 
       // Search brands by name and generics by name + indication in parallel
-      const queries = terms.map(term => {
+      const queries = terms.flatMap(term => {
         const ilike = `%${term}%`;
-        return Promise.all([
+        return [
           supabase.from('brands').select(brandSelect).ilike('name', ilike).limit(3),
           supabase.from('generics').select('id').ilike('name', ilike).limit(5),
           supabase.from('generics').select('id').ilike('indication', ilike).limit(5),
-        ]);
+        ];
       });
 
       const queryResults = await Promise.all(queries);
 
       // Collect direct brand hits
       const seen = new Set<number>();
-      const brandResults: HealthcareBrand[] = [];
+      const brandResults: any[] = [];
 
-      for (const [brandResult] of queryResults) {
-        const brandData = brandResult.data ?? [];
+      for (let i = 0; i < queryResults.length; i += 3) {
+        const brandData = queryResults[i]?.data ?? [];
         for (const b of brandData) {
           if (!seen.has(b.id)) {
             seen.add(b.id);
@@ -520,9 +516,9 @@ export async function fetchHealthcareRAGContext(userMessage: string): Promise<st
 
       // Collect generic IDs and fetch their brands
       const genericIds = new Set<number>();
-      for (const [, names, indications] of queryResults) {
-        for (const g of (names.data ?? [])) genericIds.add(g.id);
-        for (const g of (indications.data ?? [])) genericIds.add(g.id);
+      for (let i = 1; i < queryResults.length; i += 3) {
+        for (const g of (queryResults[i]?.data ?? [])) genericIds.add(g.id);
+        for (const g of (queryResults[i + 1]?.data ?? [])) genericIds.add(g.id);
       }
 
       if (genericIds.size > 0) {
@@ -541,7 +537,7 @@ export async function fetchHealthcareRAGContext(userMessage: string): Promise<st
       }
 
       // Shape the results into the same format as the RPC
-      results = brandResults.slice(0, 3).map((b) => ({
+      results = brandResults.slice(0, 3).map((b: any) => ({
         brand_name: b.name,
         generic_name: b.generics?.name ?? '',
         form: b.form ?? '',
@@ -561,7 +557,7 @@ export async function fetchHealthcareRAGContext(userMessage: string): Promise<st
     if (results.length === 0) return '';
 
     // Format results as XML context block for the system prompt
-    const entries = results.map((r, i) => {
+    const entries = results.map((r: any, i: number) => {
       const fields = [
         `Brand: ${r.brand_name}`,
         `Generic: ${r.generic_name}`,
@@ -1147,8 +1143,8 @@ Output ONLY the extracted content, nothing else.`
   });
 
   if (!response.ok) {
-
-    console.error('Image extraction error:', response.status);
+    const errorText = await response.text();
+    console.error('Image extraction error:', errorText);
     throw new Error(`Image extraction failed: ${response.status}`);
   }
 
@@ -1158,8 +1154,8 @@ Output ONLY the extracted content, nothing else.`
 
 // Streaming function for Air persona - CEREBRAS API
 export async function callCerebrasAirAPIStreaming(
-  messages: ProviderMessage[],
-  tools?: ProviderTool[],
+  messages: any[],
+  tools?: any[],
   model: string = 'qwen-3-235b-a22b-instruct-2507',
   temperature: number = 0.9,
   maxTokens: number = 2000,
@@ -1170,7 +1166,7 @@ export async function callCerebrasAirAPIStreaming(
     throw new Error('CEREBRAS_API_KEY not configured');
   }
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     model,
     messages,
     temperature,
@@ -1182,7 +1178,7 @@ export async function callCerebrasAirAPIStreaming(
   if (tools && tools.length > 0) {
     requestBody.tools = tools;
     requestBody.tool_choice = "auto";
-
+    console.log('Cerebras API Tools:', JSON.stringify(tools, null, 2));
   }
 
   console.log('Cerebras API Request:', JSON.stringify({
@@ -1203,8 +1199,8 @@ export async function callCerebrasAirAPIStreaming(
   });
 
   if (!response.ok) {
-
-    console.error('Cerebras API Error (Air):', response.status);
+    const errorText = await response.text();
+    console.error('Cerebras API Error (Air):', errorText);
     throw new Error(`Cerebras API error: ${response.status}`);
   }
 
@@ -1250,11 +1246,11 @@ export async function callCerebrasAirAPIStreaming(
 
 // Streaming function for Girlie and Pro personas - GROQ API
 export async function callGroqStandardAPIStreaming(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number,
   maxTokens: number,
-  tools?: ProviderTool[],
+  tools?: any[],
   reasoningEffort?: string
 ): Promise<ReadableStream> {
   const GROQ_API_KEY = process.env.GROQ_API_KEY;
@@ -1263,7 +1259,7 @@ export async function callGroqStandardAPIStreaming(
     throw new Error('GROQ_API_KEY not configured');
   }
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     messages,
     model,
     temperature,
@@ -1292,8 +1288,8 @@ export async function callGroqStandardAPIStreaming(
   });
 
   if (!response.ok) {
-
-    console.error('Groq API Error (Standard):', response.status);
+    const errorText = await response.text();
+    console.error('Groq API Error (Standard):', errorText);
     throw new Error(`Groq API error: ${response.status}`);
   }
 
@@ -1385,8 +1381,7 @@ function processBuffer(line: string, controller: ReadableStreamDefaultController
         }
       }
     } catch (error) {
-      void error;
-      console.error('provider_stream_parse_failed');
+      console.error('Error parsing streaming data:', error, 'Line:', trimmedLine);
     }
   }
 }
@@ -1401,11 +1396,11 @@ function extractReasoningAndContent(response: string): { content: string; thinki
 
 // Secrets to AI (FreeTheAI) API function (streaming)
 export async function callSecretsToAIAPIStreaming(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
+  tools?: any[]
 ): Promise<ReadableStream> {
   if (!SECRETSTOAI_API_KEY) {
     throw new Error('SECRETSTOAI_API_KEY is not configured for Secrets to AI requests');
@@ -1416,7 +1411,7 @@ export async function callSecretsToAIAPIStreaming(
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
   );
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     model: model,
     messages: cleanedMessages,
     temperature,
@@ -1455,9 +1450,9 @@ export async function callSecretsToAIAPIStreaming(
   });
 
   if (!response.ok) {
-
-    console.error('Secrets to AI API error:', response.status, response.status);
-    throw new Error(`Secrets to AI API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Secrets to AI API error:', response.status, errorText);
+    throw new Error(`Secrets to AI API error: ${response.status} - ${errorText}`);
   }
 
   if (!response.body) {
@@ -1517,8 +1512,7 @@ export async function callSecretsToAIAPIStreaming(
                   }
                 }
               } catch (error) {
-                void error;
-                console.error('provider_stream_parse_failed');
+                console.error('Error parsing streaming chunk:', error);
               }
             }
           }
@@ -1537,11 +1531,11 @@ export async function callSecretsToAIAPIStreaming(
 
 // Nvidia API function (streaming)
 export async function callNvidiaAPIStreaming(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
+  tools?: any[]
 ): Promise<ReadableStream> {
   if (!NVIDIA_API_KEY) {
     throw new Error('NVIDIA_API_KEY / NIM_API_KEY is not configured for Nvidia requests');
@@ -1552,7 +1546,7 @@ export async function callNvidiaAPIStreaming(
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
   );
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     model: model,
     messages: cleanedMessages,
     temperature,
@@ -1587,9 +1581,9 @@ export async function callNvidiaAPIStreaming(
   });
 
   if (!response.ok) {
-
-    console.error('Nvidia API error:', response.status, response.status);
-    throw new Error(`Nvidia API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Nvidia API error:', response.status, errorText);
+    throw new Error(`Nvidia API error: ${response.status} - ${errorText}`);
   }
 
   if (!response.body) {
@@ -1649,8 +1643,7 @@ export async function callNvidiaAPIStreaming(
                   }
                 }
               } catch (error) {
-                void error;
-                console.error('provider_stream_parse_failed');
+                console.error('Error parsing streaming chunk:', error);
               }
             }
           }
@@ -1669,11 +1662,11 @@ export async function callNvidiaAPIStreaming(
 
 // Eaon API function (streaming)
 export async function callEaonAPIStreaming(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
+  tools?: any[]
 ): Promise<ReadableStream> {
   if (!EAON_API_KEY) {
     throw new Error('EAON_API_KEY is not configured for Eaon requests');
@@ -1684,7 +1677,7 @@ export async function callEaonAPIStreaming(
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
   );
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     model: model,
     messages: cleanedMessages,
     temperature,
@@ -1723,9 +1716,9 @@ export async function callEaonAPIStreaming(
   });
 
   if (!response.ok) {
-
-    console.error('Eaon API error:', response.status, response.status);
-    throw new Error(`Eaon API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Eaon API error:', response.status, errorText);
+    throw new Error(`Eaon API error: ${response.status} - ${errorText}`);
   }
 
   if (!response.body) {
@@ -1785,8 +1778,7 @@ export async function callEaonAPIStreaming(
                   }
                 }
               } catch (error) {
-                void error;
-                console.error('provider_stream_parse_failed');
+                console.error('Error parsing streaming chunk:', error);
               }
             }
           }
@@ -1805,11 +1797,11 @@ export async function callEaonAPIStreaming(
 
 // Pollinations API function for external AI models (streaming)
 export async function callPollinationsAPIStreaming(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
+  tools?: any[]
 ): Promise<ReadableStream> {
   if (!POLLINATIONS_API_KEY) {
     throw new Error('POLLINATIONS_API_KEY is not configured for Pollinations requests');
@@ -1820,7 +1812,7 @@ export async function callPollinationsAPIStreaming(
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
   );
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
   model: model,
   messages: cleanedMessages,
   temperature,
@@ -1860,9 +1852,9 @@ export async function callPollinationsAPIStreaming(
   });
 
   if (!response.ok) {
-
-    console.error('Pollinations API error:', response.status, response.status);
-    throw new Error(`Pollinations API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Pollinations API error:', response.status, errorText);
+    throw new Error(`Pollinations API error: ${response.status} - ${errorText}`);
   }
 
   if (!response.body) {
@@ -1919,8 +1911,7 @@ export async function callPollinationsAPIStreaming(
                   ));
                 }
               } catch (error) {
-                void error;
-                console.error('provider_stream_parse_failed');
+                console.error('Error parsing streaming chunk:', error);
               }
             }
           }
@@ -1939,12 +1930,12 @@ export async function callPollinationsAPIStreaming(
 
 // Secrets to AI (FreeTheAI) API function (non-streaming)
 async function callSecretsToAIAPI(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
-): Promise<ProviderResponse> {
+  tools?: any[]
+): Promise<any> {
   if (!SECRETSTOAI_API_KEY) {
     throw new Error('SECRETSTOAI_API_KEY is not configured for Secrets to AI requests');
   }
@@ -1954,7 +1945,7 @@ async function callSecretsToAIAPI(
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
   );
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     model: model,
     messages: cleanedMessages,
     temperature,
@@ -1993,9 +1984,9 @@ async function callSecretsToAIAPI(
   });
 
   if (!response.ok) {
-
-    console.error('Secrets to AI API error:', response.status, response.status);
-    throw new Error(`Secrets to AI API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Secrets to AI API error:', response.status, errorText);
+    throw new Error(`Secrets to AI API error: ${response.status} - ${errorText}`);
   }
 
   return await response.json();
@@ -2003,12 +1994,12 @@ async function callSecretsToAIAPI(
 
 // Nvidia API function (non-streaming)
 async function callNvidiaAPI(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
-): Promise<ProviderResponse> {
+  tools?: any[]
+): Promise<any> {
   if (!NVIDIA_API_KEY) {
     throw new Error('NVIDIA_API_KEY / NIM_API_KEY is not configured for Nvidia requests');
   }
@@ -2018,7 +2009,7 @@ async function callNvidiaAPI(
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
   );
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     model: model,
     messages: cleanedMessages,
     temperature,
@@ -2053,9 +2044,9 @@ async function callNvidiaAPI(
   });
 
   if (!response.ok) {
-
-    console.error('Nvidia API error:', response.status, response.status);
-    throw new Error(`Nvidia API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Nvidia API error:', response.status, errorText);
+    throw new Error(`Nvidia API error: ${response.status} - ${errorText}`);
   }
 
   return await response.json();
@@ -2063,12 +2054,12 @@ async function callNvidiaAPI(
 
 // Eaon API function (non-streaming)
 async function callEaonAPI(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
-): Promise<ProviderResponse> {
+  tools?: any[]
+): Promise<any> {
   if (!EAON_API_KEY) {
     throw new Error('EAON_API_KEY is not configured for Eaon requests');
   }
@@ -2078,7 +2069,7 @@ async function callEaonAPI(
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
   );
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     model: model,
     messages: cleanedMessages,
     temperature,
@@ -2117,9 +2108,9 @@ async function callEaonAPI(
   });
 
   if (!response.ok) {
-
-    console.error('Eaon API error:', response.status, response.status);
-    throw new Error(`Eaon API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Eaon API error:', response.status, errorText);
+    throw new Error(`Eaon API error: ${response.status} - ${errorText}`);
   }
 
   return await response.json();
@@ -2127,12 +2118,12 @@ async function callEaonAPI(
 
 // Pollinations API function for external AI models (non-streaming)
 async function callPollinationsAPI(
-  messages: ProviderMessage[],
+  messages: any[],
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
-): Promise<ProviderResponse> {
+  tools?: any[]
+): Promise<any> {
   if (!POLLINATIONS_API_KEY) {
     throw new Error('POLLINATIONS_API_KEY is not configured for Pollinations requests');
   }
@@ -2142,7 +2133,7 @@ async function callPollinationsAPI(
     msg.role !== 'system' || (msg.content && msg.content.trim() !== '')
   );
 
-  const requestBody: ProviderRequest = {
+  const requestBody: any = {
     model: model,
     messages: cleanedMessages,
     temperature,
@@ -2177,9 +2168,9 @@ async function callPollinationsAPI(
   });
 
   if (!response.ok) {
-
-    console.error('Pollinations API error (non-streaming):', response.status, response.status);
-    throw new Error(`Pollinations API error: ${response.status}`);
+    const errorText = await response.text().catch(() => 'No error details');
+    console.error('Pollinations API error (non-streaming):', response.status, errorText);
+    throw new Error(`Pollinations API error: ${response.status} - ${errorText}`);
   }
 
   return await response.json();
@@ -2259,8 +2250,8 @@ interface StreamingModelConfig {
 
 export async function dispatchStreamingProvider(
   provider: string,
-  messages: ProviderMessage[],
-  tools: ProviderTool[] | undefined,
+  messages: any[],
+  tools: any[] | undefined,
   cfg: StreamingModelConfig
 ): Promise<ReadableStream> {
   const { model, temperature, maxTokens, reasoningEffort } = cfg;
@@ -2386,8 +2377,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Resolve special mode per-persona config (if active)
     // Map persona key to the 3 base personas used in special mode configs
     const basePersona = (['default', 'girlie', 'pro'].includes(persona) ? persona : 'default') as 'default' | 'girlie' | 'pro';
-    const specialModeConfig = specialMode && (SPECIAL_MODE_CONFIGS as Record<string, Record<'default' | 'girlie' | 'pro', SpecialModeConfig>>)[specialMode]
-      ? (SPECIAL_MODE_CONFIGS as Record<string, Record<'default' | 'girlie' | 'pro', SpecialModeConfig>>)[specialMode][basePersona]
+    const specialModeConfig = specialMode && (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode]
+      ? (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode][basePersona]
       : null;
 
     // Get the appropriate system prompt
@@ -2399,7 +2390,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const validHeatLevel = (heatLevel >= 1 && heatLevel <= 5) ? heatLevel : 2;
       systemPrompt = personaConfig.systemPromptsByHeatLevel[validHeatLevel as keyof typeof personaConfig.systemPromptsByHeatLevel];
     } else {
-      systemPrompt = (personaConfig as ModelConfig).systemPrompt ?? '';
+      systemPrompt = (personaConfig as any).systemPrompt;
     }
 
     // Fetch user memories and add to system prompt if user is logged in
@@ -2442,7 +2433,7 @@ ${thinkingDirective}`;
     // Decided in code, not asked of the model: see api/_lib/tools.ts.
     const imageAllowed = resolveImageAllowed(messages, !!imageData);
     const searchAllowed = resolveWebSearchAllowed(messages);
-    const toolsToUse: ProviderTool[] = selectTools({
+    const toolsToUse: any[] = selectTools({
       specialModeConfig,
       includeSkills: persona === 'pro',
       imageAllowed,
@@ -2452,14 +2443,14 @@ ${thinkingDirective}`;
     // Apply temperature, maxTokens, and reasoningEffort overrides from special mode
     const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
     const maxTokensToUse = specialModeConfig?.maxTokens ?? personaConfig.maxTokens;
-    const reasoningEffortToUse: string | undefined = specialModeConfig?.reasoningEffort ?? (personaConfig as ModelConfig).reasoningEffort;
+    const reasoningEffortToUse: string | undefined = specialModeConfig?.reasoningEffort ?? (personaConfig as any).reasoningEffort;
 
     // Healthcare RAG: inject database context into system prompt when in TM Healthcare mode
     // Scans the last few messages (not just the latest) so follow-up questions
     // like "what are the alternatives?" still carry drug-name context forward.
     if (specialMode === 'tm-healthcare') {
       const recentMessages = messages.slice(-6); // last 6 messages (~3 turns)
-      const combinedText = recentMessages.map((m) => m.content).join(' ');
+      const combinedText = recentMessages.map((m: any) => m.content).join(' ');
       if (combinedText.trim()) {
         const ragContext = await fetchHealthcareRAGContext(combinedText);
         if (ragContext) {
@@ -2477,7 +2468,7 @@ ${thinkingDirective}`;
 
     // Messages can carry tool-call fields (tool_calls / tool_call_id) once the
     // PRO agentic loop appends them, so keep the element shape open.
-    let apiMessages: ProviderMessage[];
+    let apiMessages: any[];
     // Track if we need to run the image OCR pipeline before the main AI call
     const hasImageInput = !!imageData;
     const imageUrlsForOCR = hasImageInput ? (Array.isArray(imageData) ? imageData : [imageData]) : [];
@@ -2667,7 +2658,7 @@ ${thinkingDirective}`;
       }
     } else {
       // Non-streaming response (fallback)
-      let apiResponse: ProviderResponse = {};
+      let apiResponse: any;
 
       // Image handling for non-streaming: use OCR pipeline
       if (hasImageInput && imageUrlsForOCR.length > 0) {
@@ -2700,12 +2691,12 @@ ${thinkingDirective}`;
       // Choose API based on persona
       if (persona === 'default') {
         // Air persona — check Flow State first, then configured provider
-        const flowConfig = (personaConfig as ModelConfig).flowState;
+        const flowConfig = (personaConfig as any).flowState;
         if (flowState && flowConfig) {
           // Flow State: route based on configured provider
           const fsProvider = flowConfig.provider || 'groq';
           if (fsProvider === 'groq') {
-            const requestBody: ProviderRequest = {
+            const requestBody: any = {
               messages: apiMessages,
               model: flowConfig.model,
               temperature: flowConfig.temperature,
@@ -2762,7 +2753,7 @@ ${thinkingDirective}`;
               toolsToUse
             );
           } else {
-            const requestBody: ProviderRequest = {
+            const requestBody: any = {
               model: flowConfig.model,
               messages: apiMessages,
               temperature: flowConfig.temperature,
@@ -2787,10 +2778,10 @@ ${thinkingDirective}`;
             apiResponse = await response.json();
           }
         } else {
-          const airProvider = (personaConfig as ModelConfig).provider || 'cerebras';
+          const airProvider = (personaConfig as any).provider || 'cerebras';
 
           if (airProvider === 'groq') {
-            const requestBody: ProviderRequest = {
+            const requestBody: any = {
               messages: apiMessages,
               model: modelToUse,
               temperature: temperatureToUse,
@@ -2850,7 +2841,7 @@ ${thinkingDirective}`;
               toolsToUse
             );
           } else {
-            const requestBody: ProviderRequest = {
+            const requestBody: any = {
               model: modelToUse,
               messages: apiMessages,
               temperature: temperatureToUse,
@@ -2863,7 +2854,7 @@ ${thinkingDirective}`;
             if (toolsToUse && toolsToUse.length > 0) {
               requestBody.tools = toolsToUse;
               requestBody.tool_choice = "auto";
-
+              console.log('Cerebras API (non-streaming) Tools:', JSON.stringify(toolsToUse, null, 2));
             }
 
             console.log('Cerebras API (non-streaming) Request:', JSON.stringify({
@@ -2906,7 +2897,7 @@ ${thinkingDirective}`;
 
           console.log(`PRO Persona Agent Loop (non-streaming): Iteration ${iteration} of ${maxIterations}`);
 
-          const proProvider = (personaConfig as ModelConfig).provider || 'pollinations';
+          const proProvider = (personaConfig as any).provider || 'pollinations';
           let apiResponse;
           if (proProvider === 'secretstoai' || proProvider === 'secrectstoai') {
             apiResponse = await callSecretsToAIAPI(
@@ -2933,7 +2924,7 @@ ${thinkingDirective}`;
               activeTools
             );
           } else if (proProvider === 'groq') {
-            const requestBody: ProviderRequest = {
+            const requestBody: any = {
               messages: currentMessages,
               model: modelToUse,
               temperature: temperatureToUse,
@@ -2956,7 +2947,7 @@ ${thinkingDirective}`;
             });
             apiResponse = await response.json();
           } else if (proProvider === 'cerebras') {
-            const requestBody: ProviderRequest = {
+            const requestBody: any = {
               model: modelToUse,
               messages: currentMessages,
               temperature: temperatureToUse,
@@ -3095,7 +3086,7 @@ ${thinkingDirective}`;
             toolsToUse
           );
         } else if (provider === 'cerebras') {
-          const requestBody: ProviderRequest = {
+          const requestBody: any = {
             model: modelToUse,
             messages: apiMessages,
             temperature: temperatureToUse,

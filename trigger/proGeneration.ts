@@ -1,5 +1,3 @@
-import type { ProviderMessage, ProviderTool } from '../api/_lib/providerTypes.js';
-import { durableProcessingAvailable, RETENTION_UNAVAILABLE } from '../api/_lib/retention/policy.js';
 import { task, logger } from "@trigger.dev/sdk";
 import {
   dispatchStreamingProvider,
@@ -17,8 +15,8 @@ import { proOutputStream } from "./streams.js";
 // long-running part: the PRO agentic tool loop.
 export interface ProGenerationPayload {
   jobId: string;
-  apiMessages: ProviderMessage[];
-  tools: ProviderTool[];
+  apiMessages: any[];
+  tools: any[];
   model: string;
   temperature: number;
   maxTokens: number;
@@ -48,11 +46,6 @@ export const proGeneration = task({
   maxDuration: 3600,
   retry: { maxAttempts: 1 },
   run: async (payload: ProGenerationPayload) => {
-    // Direct/queued task invocations cannot bypass the API retention gate.
-    if (!durableProcessingAvailable()) {
-      await failProJob(payload.jobId, RETENTION_UNAVAILABLE.code);
-      return { ok: false, error: RETENTION_UNAVAILABLE.code };
-    }
     let pendingText = "";
     let lastFlush = Date.now();
 
@@ -147,22 +140,21 @@ export const proGeneration = task({
 
       await emitMarker("[STATUS_END]");
       await flush(true);
-      await completeProJob(payload.jobId, fullContent);
       await emitMarker(`\u001e{"type":"pro_done"}\n`);
+
+      await completeProJob(payload.jobId, fullContent);
       logger.log("PRO generation completed", { jobId: payload.jobId, contentLength: fullContent.length });
 
       return { ok: true, contentLength: fullContent.length };
     } catch (error) {
-      const message = 'PRO_GENERATION_FAILED';
-      void error;
+      const message = error instanceof Error ? error.message : String(error);
       logger.error("PRO generation failed", { jobId: payload.jobId, error: message });
 
       try {
         await flush(true);
         await proOutputStream.append(`\u001e${JSON.stringify({ type: "pro_error", message })}\n`);
       } catch (emitError) {
-        void emitError;
-        logger.error("Failed to emit pro_error frame");
+        logger.error("Failed to emit pro_error frame", { emitError });
       }
 
       await failProJob(payload.jobId, message);
@@ -173,8 +165,7 @@ export const proGeneration = task({
   },
   onFailure: async ({ payload, error }) => {
     // Crash-level failure (process died before the run handler could finish).
-    const message = 'PRO_GENERATION_FAILED';
-    void error;
+    const message = error instanceof Error ? error.message : String(error);
     await failProJob(payload.jobId, message);
   },
 });

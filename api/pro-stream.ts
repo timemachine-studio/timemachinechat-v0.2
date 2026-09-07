@@ -1,4 +1,3 @@
-import { proContentExpired } from './_lib/retention/policy.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { runs } from '@trigger.dev/sdk';
 import { proOutputStream } from '../trigger/streams.js';
@@ -13,8 +12,8 @@ import { getProJobByRunId } from './_lib/proJobs.js';
 //
 // The function intentionally caps its own lifetime below Vercel's 300s Hobby
 // limit. The client reconnects with ?start=<nextIndex> and continues exactly
-// where it left off while recovery access is valid. Trigger's documented
-// stream TTL is not proof of this project's retention or deletion settings.
+// where it left off — the Trigger.dev stream keeps every chunk for 28 days,
+// so nothing is ever lost, and a generation can run for as long as it needs.
 
 const MAX_PROXY_MS = 240_000; // stay well under the 300s platform limit
 const READ_TIMEOUT_SECONDS = 60; // how long one read() waits for new data
@@ -57,7 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     getProJobByRunId(runId),
   ]);
 
-  if (!job || proContentExpired(job)) {
+  if (!job) {
     return res.status(404).json({ error: 'Unknown run id' });
   }
 
@@ -66,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   res.setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
   const abort = new AbortController();
@@ -76,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let index = start;
 
   try {
-    while (Date.now() - startedAt < MAX_PROXY_MS && !abort.signal.aborted && !proContentExpired(job)) {
+    while (Date.now() - startedAt < MAX_PROXY_MS && !abort.signal.aborted) {
       try {
         const stream = await proOutputStream.read(runId, {
           startIndex: index,
@@ -86,7 +85,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         let timeUp = false;
         for await (const chunk of stream) {
-          if (abort.signal.aborted || proContentExpired(job)) break;
+          if (abort.signal.aborted) break;
           res.write(JSON.stringify({ i: index, d: chunk }) + '\n');
           index++;
           if (Date.now() - startedAt >= MAX_PROXY_MS) {
@@ -99,13 +98,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // the client should reconnect from `index`. Both cases end here.
         void timeUp;
         return res.end();
-      } catch (err: unknown) {
+      } catch (err: any) {
         if (abort.signal.aborted) {
           return res.end();
         }
 
         const isTimeout =
-          (err instanceof Error ? err.name : undefined) === 'TimeoutError' || /timed?\s*out/i.test(String((err instanceof Error ? err.message : String(err)) ?? err));
+          err?.name === 'TimeoutError' || /timed?\s*out/i.test(String(err?.message ?? err));
 
         if (!isTimeout) {
           // Transient read failure: brief pause, then resume from last index.

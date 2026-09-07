@@ -1,12 +1,8 @@
-import type { Database } from '../../types/database';
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, ChefHat, Clock, ArrowRight, Star, Heart, Flame, Sparkles, X } from 'lucide-react';
 import { ChefAIKitchen } from './ChefAIKitchen';
 import { supabase } from '../../lib/supabase';
-
-type Recipe = Omit<Database['public']['Tables']['kitchen_recipes']['Row'], 'ingredients' | 'steps'> & { ingredients: string[]; steps: string[] };
-const stringItems = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 
 const fadeUp = (delay = 0) => ({
     initial: { opacity: 0, y: 20 },
@@ -20,9 +16,9 @@ export function CookBookPage() {
     const [isKitchenMode, setIsKitchenMode] = useState(false);
 
     // Kitchen State
-    const [recipes, setRecipes] = useState<Recipe[]>([]);
+    const [recipes, setRecipes] = useState<any[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
+    const [selectedRecipe, setSelectedRecipe] = useState<any | null>(null);
 
     const categories = ['All', 'Breakfast', 'Dinner', 'Healthy', 'Italian', 'Japanese'];
 
@@ -38,7 +34,7 @@ export function CookBookPage() {
                 if (error) {
                     throw error;
                 }
-                setRecipes((data || []).map(row => ({ ...row, ingredients: stringItems(row.ingredients), steps: stringItems(row.steps) })));
+                setRecipes(data || []);
             } catch (error) {
                 console.error('Error fetching recipes:', error);
             } finally {
@@ -107,7 +103,7 @@ export function CookBookPage() {
                                 className="relative w-full h-[400px] md:h-[500px] rounded-[32px] overflow-hidden mb-16 group cursor-pointer"
                             >
                                 <img
-                                    src={featuredRecipe.image ?? undefined}
+                                    src={featuredRecipe.image}
                                     alt={featuredRecipe.title}
                                     className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover:scale-105"
                                 />
@@ -183,7 +179,7 @@ export function CookBookPage() {
                                         >
                                             <div className="relative h-64 overflow-hidden">
                                                 <img
-                                                    src={recipe.image ?? undefined}
+                                                    src={recipe.image}
                                                     alt={recipe.title}
                                                     className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
                                                 />
@@ -273,7 +269,7 @@ export function CookBookPage() {
                         >
                             <div className="relative h-64 sm:h-80 md:h-96 w-full">
                                 <img
-                                    src={selectedRecipe.image ?? undefined}
+                                    src={selectedRecipe.image}
                                     alt={selectedRecipe.title}
                                     className="w-full h-full object-cover"
                                 />

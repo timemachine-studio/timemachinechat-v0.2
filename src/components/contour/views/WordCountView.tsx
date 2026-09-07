@@ -1,9 +1,8 @@
-import { ICON_MAP } from './viewIcons';
 import React from 'react';
 import { Type } from 'lucide-react';
 import { ModuleData, MODULE_META } from '../moduleRegistry';
 import { getStatItems } from '../modules/wordCounter';
-import { AccentTheme, IconBadge, HintView, FooterHint } from './shared';
+import { AccentTheme, IconBadge, HintView, FooterHint, ICON_MAP } from './shared';
 
 // ─── Word Counter View ─────────────────────────────────────────
 

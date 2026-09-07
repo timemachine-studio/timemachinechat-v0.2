@@ -1,8 +1,6 @@
 # CLAUDE.md
 
-Repository guidance for coding agents. Updated by TM-00 on 2026-09-06.
-
-Read `codex.md`, `status.md`, and `docs/agent/baseline.md` for the current handoff. `superplan.md` governs the agent-runtime roadmap and supersedes the older blanket cloud-history prohibition below. Historical production-check reports are not evidence of current deployment state.
+Guidance for Claude Code when working in this repository.
 
 ## What this is
 
@@ -13,26 +11,24 @@ Currently pre-launch (soft launch in preparation). **Read `production-check.md` 
 ## Commands
 
 ```bash
-npm ci               # install the locked dependency tree; Node 22.x
-npm run dev          # Vite :5173 plus local API middleware
-npm run typecheck    # tsc --noEmit
-npm run lint         # eslint .
-npm test             # vitest run
-npm run build        # tsc --noEmit && vite build
-npm run preview      # frontend build preview; not a Vercel API environment
+npm install          # install dependencies
+npm run dev          # Vite dev server on :5173 (also serves api/*.ts via middleware)
+npm run build        # vite build — NOTE: does not typecheck (see production-check.md 1.1)
+npx tsc --noEmit     # the real typecheck — currently 155 errors
+npm run lint         # eslint — currently 299 problems
+npm test             # vitest run — currently one suite (notes renderInline)
+npm run preview      # preview the production build
 ```
 
-TM-00 baseline: typecheck passes; lint has 136 errors (`no-explicit-any`) and 5 warnings; 24 tests pass in 3 files. Tests cover Notes inline sanitization, error mapping using synthetic Response objects, and UUID generation. They do not verify live providers, RLS, or the stream parser.
-
-Vite requires both public Supabase variables even for tests/build. With no credentials, use the explicit local-only placeholder commands in `docs/agent/baseline.md`. Those runs are not integration verification. Build emits CSS import-order and bundle-size warnings. Do not copy old audit counts as current facts.
+Test coverage is one file so far (`src/components/notes/renderInline.test.ts`); broadening it is `production-check.md` 2.4.
 
 ## Architecture
 
 ```
 src/
-  App.tsx                  1,229 lines at baseline. All routing; eager route imports.
+  App.tsx                  ~1200 lines. All routing. Imports every route eagerly.
   main.tsx                 Entry: BrowserRouter + HelmetProvider + App
-  hooks/useChat.ts         1,611 lines at baseline. Core chat state machine.
+  hooks/useChat.ts         ~1300 lines. Core chat state machine.
   services/                Client-side API wrappers
     ai/aiProxyService.ts   Talks to /api/ai-proxy; contains the stream parser
   context/                 AuthContext (Supabase session), ThemeContext
@@ -41,11 +37,11 @@ src/
     contour/               Command palette — 25 modules + 25 views
     notes/                 Block-based Notion-like editor
     <feature>/             One directory per feature area
-  types/database.ts        Handwritten Supabase types: 21 tables, not a live schema dump
+  types/database.ts        Supabase generated types (STALE — 10 of 18 tables)
   config/constants.ts      Client config, persona display data, feature flags
 
 api/                       Vercel serverless functions
-  ai-proxy.ts              3,215 lines at baseline. Main endpoint. Personas, prompts,
+  ai-proxy.ts              2900 lines. THE main endpoint. Personas, prompts,
                            provider routing, rate limiting, memory, tools.
   _lib/
     auth.ts                getAuthenticatedRequestUser — verifies Supabase JWT
@@ -56,7 +52,7 @@ api/                       Vercel serverless functions
   pro-generation.ts        Trigger.dev-backed long-running PRO jobs
   pro-stream.ts            Streaming for PRO jobs
 
-supabase/migrations/       INCOMPLETE — 5 SQL files create 5 tables; see baseline inventory
+supabase/migrations/       INCOMPLETE — only 4 of 18 tables
 trigger/                   Trigger.dev task definitions
 ```
 
@@ -80,7 +76,7 @@ ChatInput → useChat → aiProxyService → POST /api/ai-proxy
 - `[STATUS:...]` and `[IMAGE_ANALYZING]` inline markers
 - ``-prefixed JSON control frames terminated by `\n` (used for MCP approval requests)
 
-`createStreamChunkParser` in `src/services/ai/aiProxyService.ts` is the client decoder. It is intricate and has no dedicated parser tests — **change it carefully** and add tests if you touch it.
+`createStreamChunkParser` in `src/services/ai/aiProxyService.ts` is the only decoder. It is intricate and untested — **change it carefully** and add tests if you touch it.
 
 ### Providers
 
@@ -112,38 +108,43 @@ Server (never `VITE_`-prefixed):
 - **TypeScript strict mode** is on. Don't add `any` to silence an error — the codebase already has too many.
 - **Tailwind** for styling. Glass-morphism aesthetic; theme tokens live in `src/themes/`.
 - **Framer Motion** for animation, GSAP for a few loading effects.
-- Components are function components with hooks. No class components except the error boundary.
+- Components are function components with hooks. No class components except (soon) the error boundary.
 - Comments in this codebase explain *why*, not *what*. Match that — several existing comments document non-obvious decisions and are worth reading.
 - Import with the `@/` alias where it's already used; relative paths elsewhere. Both are in play.
 
 ## Things that will bite you
 
-1. Build includes typechecking. `tsconfig.json` includes `src`, `api`, and `trigger`; add future `shared` contracts deliberately. For a fresh diagnostic run, use `npm run typecheck -- --incremental false`.
-2. Database types are handwritten. `profiles.is_pro` does not establish a verified paid entitlement. See the source-only schema inventory and pending staging audit in the baseline.
-3. The dev API middleware is a partial Vercel shim. It parses JSON into memory without the platform's body limits. Local success is not deployment verification.
-4. `api/ai-proxy.ts` still contains provider dispatch, prompts, and duplicated paths. `resolveRunProvider` owns routing; preserve fallback, Flow State, special-mode, and persona behavior during extraction.
-5. Auth is progressive; the shell renders before profile loading finishes. Cached client identity is not server authorization.
-6. Error boundaries, a wildcard 404 route, UUID messages, typed failures, abort handling, and per-turn Retry exist. The 24 unit tests do not prove all end-to-end recovery cases. The shared loop still parses each received chunk independently and skips malformed JSON; fix this in TM-08.
-7. The shared loop executes tools sequentially, defaults to five turns, and hides tools on the last turn. MCP discovery helpers are only wired into the approval endpoint; do not call main-chat MCP integration complete.
-8. Two `ChatInput.tsx` files exist; `src/components/chat/ChatInput.tsx` is the main-chat input.
-9. Notes types and persistence live inside `NotesPage.tsx`; every state change writes the whole `tm-notes` array. There is no shared transactional repository or stable `noteId` targeting yet.
-10. History list views eagerly load message bodies. `/chat/:id` finds a session then redirects to `/` without passing it; do not assume it is a working source link. History-list selection uses a separate navigation-state path.
-11. `saveLocalSession` catches and only logs write errors. Supabase saves delete and reinsert messages without a transaction; inserted rows omit original message IDs. These are existing storage risks, not work to fold into unrelated tasks.
+1. **`npm run build` does not typecheck.** It passes while `tsc --noEmit` reports 155 errors. Always run `npx tsc --noEmit` yourself — and note that `incremental: true` caches results in `tsconfig.tsbuildinfo`, and that a *parse* error in one file makes tsc bail out and report only that file. A sudden drop in the error count means a syntax error, not progress. `rm -f tsconfig.tsbuildinfo` before trusting a count.
+2. **`src/types/database.ts` is stale.** Nine tables the code queries aren't declared, so those query results are typed `never` and every field access on them is unchecked. Regenerate before trusting DB types.
+3. **The dev API middleware is hand-rolled.** `vite.config.ts` reimplements Vercel's request/response shim to run `api/*.ts` locally. It is not a faithful reproduction — no body limits, different error handling, different streaming behaviour. If something works in dev but not on Vercel, suspect this first.
+4. **`api/ai-proxy.ts` is ~3100 lines**, roughly half of it inline prompt strings. Use `grep -n` to navigate; don't read it top to bottom.
+5. **Identity comes from the verified JWT, and only from there.** Fixed in 0.1/0.2: `userId` is no longer read from `req.body` anywhere, and user-scoped reads go through `createUserScopedClient(accessToken)` so RLS applies instead of the service-role bypass. Never reintroduce a body-supplied id — `assertOwnUserId()` exists to make that fail loudly if you do.
+6. **Rate limiting fails CLOSED.** A limiter backend error returns `503`, not a free generation (0.4). Quota is charged only after a generation succeeds, so don't add an optimistic increment — the client reads its remaining count from `GET /api/ai-proxy?quota=<persona>`, and `useAnonymousRateLimit`'s localStorage counter is display-only.
+7. **There is no error boundary.** An uncaught render error blanks the entire app.
+8. **No 404 route.** Unknown URLs render a blank black page.
+9. **Two `ChatInput.tsx` files exist** — `src/components/ChatInput.tsx` and `src/components/chat/ChatInput.tsx`. The `chat/` one is the live one.
+10. **A truncated stream reads as success.** `aiProxyService.ts` breaks its read loop on `done` and calls `onComplete` without ever checking that the `[STATUS_END]` sentinel arrived. A provider that dies mid-stream produces an empty AI bubble and no error. Fixing this is `production-check.md` 1.9 — until then, don't trust "it completed" to mean "it worked."
+11. **`res.status(500)` after streaming has started is a no-op.** the streaming error path has no `res.headersSent` guard, so the error text gets appended to the AI's message instead. Guard every post-header write.
+12. **Message IDs are `Date.now()`** (and `Date.now() + 1` for AI placeholders). They collide. `key={message.id}` means colliding IDs make messages merge or vanish. Being replaced with `crypto.randomUUID()` in 1.12.
+13. **`useChat.ts` has 8 `exhaustive-deps` violations.** The send handler captures a stale `currentSessionId`, so a completion can save into the previously-open session. There's a comment in `completeStreamingMessage` patching the symptom — don't add more of those, fix the closure.
+14. **The whole app blocks on auth.** `App.tsx` returns a bare spinner until `getSession()` *and* `fetchProfile()` both resolve (the latter with an 8s timeout). Being made progressive in 1.14 — don't add anything else to that gate.
+15. **`saveLocalSession` swallows `QuotaExceededError`.** All sessions are one `localStorage` JSON blob, and messages carry base64 images and full PDF text. It silently stops saving at ~5 MB. Moving to IndexedDB in LS.2.
 
-## Storage direction
+## Storage direction (important)
 
-The owner decision in `superplan.md` D1 is authoritative: free personal history stays on-device; paid personal history also defaults to device storage, with cloud sync allowed only after a verified paid entitlement AND explicit opt-in. Air/PRO selection is separate from subscription authority. Notes stay local by default.
+**Chat messages are moving to on-device storage only.** No cloud sync, no migration path — privacy is the product's headline feature. See `production-check.md` Gate LS.
 
-Today, signed-in personal chats still automatically use Supabase `chat_sessions` / `chat_messages`; anonymous chats use the `chatSessions` localStorage blob. The target IndexedDB store and paid opt-in gates are not implemented. A local-to-cloud migration helper exists, but no external caller was found in this checkout.
+What this means for new code:
+- **Do not add new writes of conversation content to Supabase.** `chat_sessions` and `chat_messages` are being removed.
+- Route all storage through `ChatService`. Several components currently bypass it and import the Supabase functions directly (`ChatHistoryPage`, `ChatHistoryModal`, `App.tsx`) — don't add more.
+- The store is becoming IndexedDB, not `localStorage`. Don't build on the `chatSessions` blob.
+- **A local-only store makes silent write failures unrecoverable.** There is no cloud copy. Never `catch` a storage error and only `console.error` it.
 
-For new work:
+**Today, signed-in chats still go to Supabase.** `ChatService.saveSession` routes signed-in users to `saveSupabaseSession` and only anonymous users to `localStorage`. The device-only store is the *destination*, not the current state — verify before writing anything that depends on it.
 
-- Route storage through the shared repository/ChatService. Do not add direct Supabase history consumers or build on the localStorage blob.
-- Do not add automatic cloud history writes for free or opted-out users. Keep paid cloud sync disabled until TM-03 and TM-15 are verified.
-- Preserve legacy cloud data until export/import and consent are verified. Gate LS does not authorize dropping history or memory tables.
-- Account for provider processing, Trigger payloads/streams, PRO final output, memories, and group-chat storage separately. Actual service retention needs TM-02 verification.
-- Never swallow storage errors; local data may have no backup.
-- Do not claim that messages never leave the device or that TM retains no content. Current signup and privacy claims require reconciliation with actual behavior in TM-02/LS.1.
+Two things to keep straight when writing user-facing copy:
+- Local storage of *history* does not make a conversation private — every turn is still sent to a third-party provider to generate the reply. "We don't store your chats" is true; "your messages never leave your device" is not. See LS.1.
+- **The signup form currently promises "Your chats are stored safely in your device only."** That claim is not true until Gate LS ships. It is tracked as a launch blocker in LS.3 — do not ship to production before it is true.
 
 ## Security rules for this codebase
 

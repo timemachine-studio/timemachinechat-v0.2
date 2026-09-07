@@ -1,9 +1,8 @@
-import type { AccentTheme } from './shared';
 import React from 'react';
 import { ArrowRight, FileText, HeartPulse, Coffee, ChefHat, Shirt, ShoppingCart, Calendar, Home } from 'lucide-react';
 import { ModuleData } from '../moduleRegistry';
 
-const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+const ICON_MAP: Record<string, any> = {
     FileText,
     HeartPulse,
     Coffee,
@@ -20,7 +19,7 @@ export function NavigationView({
     onNavigate,
 }: {
     module: ModuleData;
-    accent: AccentTheme;
+    accent: any;
     onNavigate?: (path: string) => void;
 }) {
     const nav = module.navigation;

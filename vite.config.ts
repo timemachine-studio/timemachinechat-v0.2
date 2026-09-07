@@ -56,7 +56,7 @@ export default defineConfig(({ mode }) => {
                   });
 
                   // Read request body if present
-                  let body: unknown = null;
+                  let body: any = null;
                   if (req.method === 'POST' || req.method === 'PUT') {
                     body = await new Promise((resolve) => {
                       let data = '';
@@ -81,19 +81,19 @@ export default defineConfig(({ mode }) => {
                       res.statusCode = code;
                       return vercelRes;
                     },
-                    json(data: unknown) {
+                    json(data: any) {
                       res.setHeader('Content-Type', 'application/json');
                       res.end(JSON.stringify(data));
                       return vercelRes;
                     },
-                    send(data: unknown) {
+                    send(data: any) {
                       if (Buffer.isBuffer(data)) {
                         res.end(data);
                       } else if (typeof data === 'object') {
                         res.setHeader('Content-Type', 'application/json');
                         res.end(JSON.stringify(data));
                       } else {
-                        res.end(String(data));
+                        res.end(data);
                       }
                       return vercelRes;
                     }

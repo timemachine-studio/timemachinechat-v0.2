@@ -2231,8 +2231,8 @@ export function NotesPage() {
       setPendingEdits(newPendingEdits);
       setPendingNewBlocks(newPending);
       setAiMessage(response.message);
-    } catch (err: unknown) {
-      setAiMessage((err instanceof Error ? err.message : String(err)) || 'AI request failed.');
+    } catch (err: any) {
+      setAiMessage(err.message || 'AI request failed.');
     } finally {
       setAiLoading(false);
     }

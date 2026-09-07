@@ -47,6 +47,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       url.searchParams.set('seed', String(parsed.seed));
     }
 
+    const debugUrl = url.toString().replace(/key=[^&]+/, 'key=***');
+    console.log('Pollinations request URL (music):', debugUrl);
 
     // Fetch the audio from Pollinations server-side
     const audioResponse = await fetch(url.toString(), {
@@ -57,9 +59,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     if (!audioResponse.ok) {
-
-      // Upstream bodies can echo prompts; retain only a fixed diagnostic.
-      console.error('media_provider_failed');
+      const errorText = await audioResponse.text().catch(() => '');
+      // The upstream status and body stay in the server log. Returning them
+      // leaked provider internals to the browser (production-check.md 1.7).
+      console.error('Pollinations error:', errorText.slice(0, 500));
       return res.status(502).json(
         apiErrorBody('PROVIDER_DOWN', 'Failed to generate audio')
       );
@@ -69,14 +72,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const contentType = audioResponse.headers.get('content-type') || 'audio/mpeg';
 
     res.setHeader('Content-Type', contentType);
-    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     res.setHeader('Content-Length', audioBuffer.byteLength);
 
     return res.status(200).send(Buffer.from(audioBuffer));
 
   } catch (error) {
-    void error;
-    console.error('Audio proxy error:');
+    console.error('Audio proxy error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 }
