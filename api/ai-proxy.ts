@@ -429,7 +429,7 @@ You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule wi
       { provider: 'eaon', model: 'kimi-k3-extended' },
     ],
     temperature: 0.8,
-    maxTokens: 67200
+    maxTokens: 57200
   }
 };
 
