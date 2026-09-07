@@ -814,6 +814,12 @@ retryContext?: { persona: string; heatLevel?: number; specialMode?: string; flow
 > **Done 2026-08-27.** `api/_lib/providerResilience.ts` adds a 45s `providerFetch` deadline at every provider call site, retry with exponential backoff + jitter honouring `Retry-After`, a per-instance circuit breaker (3 failures → 30s cooldown), an Air fallback chain, and p50/p95/p99 latency logging. **50 concurrent prompts: 0 silent failures, 0 hangs**, latency spread down from the measured 9× to **2.2×** (p99 4.0s, inside the 60s budget). Breaker opening and latency percentiles observed in the server log.
 >
 > ⚠ The fallback chain could not be exercised locally — only `NVIDIA_API_KEY` is set, so there is nothing to fall back *to*. Under the 50-way load NVIDIA rejected 46 requests upstream; they surfaced as clean, typed, retryable `502 PROVIDER_DOWN` before any bytes streamed (which is the point), but the chain itself still needs verifying in an environment with Groq/Cerebras keys.
+>
+> **Follow-up 2026-09-07.** Beta testers on the Groq primary were seeing the "huge load on our servers" popup, so the chain was reworked:
+> - Air's hops now live in `AI_PERSONAS.default.fallbacks` (Groq → Eaon → NVIDIA) instead of a separate `AIR_FALLBACK_HOPS` const, and `buildProviderChain` reads them from there. The old version filtered out any hop sharing the primary's provider, which silently shortened the chain.
+> - A hop with somewhere to fall through to no longer waits out backoff or an upstream `Retry-After` (a 429 could stall ~20s before handing off); it retries once, briefly, then moves on. Only the final hop spends the full budget.
+> - An upstream `ProviderHttpError` in the outer catch was string-matched into `RATE_LIMITED`, so a busy minute at Groq was reported to the user as *their* quota running out. It is now `PROVIDER_DOWN`.
+> - Covered by `api/providerFallback.test.ts`. Still unverified against live keys.
 
 **Severity:** High · **Effort:** M · **Files:** `api/ai-proxy.ts`, `src/services/ai/aiProxyService.ts`
 

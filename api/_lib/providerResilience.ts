@@ -19,6 +19,14 @@ export const PROVIDER_TIMEOUT_MS = 45_000;
 const MAX_PROVIDER_RETRIES = 2;
 const RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 
+// Retries while a fallback hop is still available. Sitting on a provider that
+// just said 429 is the worst of both worlds: the user waits out our backoff
+// (and an upstream Retry-After can be a minute) only to be told the model is
+// busy, when another provider was ready the whole time. One quick retry
+// absorbs a one-off blip without stalling; anything worse hands off.
+const MAX_RETRIES_BEFORE_FALLBACK = 1;
+const MAX_BACKOFF_BEFORE_FALLBACK_MS = 750;
+
 // Circuit breaker: after this many consecutive failures a provider is skipped
 // for the cooldown window instead of being piled onto.
 const BREAKER_THRESHOLD = 3;
@@ -178,8 +186,13 @@ export async function runWithProviderFallback<T>(
   // than failing without contacting anyone.
   const chain = usable.length > 0 ? usable : hops.slice(0, 1);
 
-  for (const hop of chain) {
-    for (let attemptIndex = 0; attemptIndex <= MAX_PROVIDER_RETRIES; attemptIndex++) {
+  for (const [hopIndex, hop] of chain.entries()) {
+    // The last hop has nowhere to hand off to, so it is the only one that
+    // spends the full retry budget and honours an upstream Retry-After.
+    const isLastHop = hopIndex === chain.length - 1;
+    const maxRetries = isLastHop ? MAX_PROVIDER_RETRIES : MAX_RETRIES_BEFORE_FALLBACK;
+
+    for (let attemptIndex = 0; attemptIndex <= maxRetries; attemptIndex++) {
       try {
         const value = await attempt(hop);
         recordProviderOutcome(hop.provider, true);
@@ -191,12 +204,17 @@ export async function runWithProviderFallback<T>(
         const retryable = isRetryableError(error);
         log(`${hop.provider} attempt ${attemptIndex + 1} failed${retryable ? '' : ' (not retryable)'}`);
 
-        if (!retryable || attemptIndex === MAX_PROVIDER_RETRIES) break;
+        if (!retryable || attemptIndex === maxRetries) break;
 
         const retryAfterMs = error instanceof ProviderHttpError ? error.retryAfterMs : undefined;
-        await sleep(backoffDelay(attemptIndex, retryAfterMs));
+        const delay = isLastHop
+          ? backoffDelay(attemptIndex, retryAfterMs)
+          : Math.min(backoffDelay(attemptIndex), MAX_BACKOFF_BEFORE_FALLBACK_MS);
+        await sleep(delay);
       }
     }
+
+    if (!isLastHop) log(`${hop.provider} exhausted, falling through to ${chain[hopIndex + 1].provider}`);
   }
 
   throw lastError;
