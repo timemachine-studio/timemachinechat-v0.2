@@ -798,9 +798,9 @@ export function formatMemoriesForContext(memories: AIMemory[], userProfile?: { n
 
 // Default rate limiting configuration (fallback when no custom limits set)
 const DEFAULT_PERSONA_LIMITS: Record<string, number> = {
-  default: parseInt(process.env.VITE_DEFAULT_PERSONA_LIMIT || '50'),
+  default: parseInt(process.env.VITE_DEFAULT_PERSONA_LIMIT || '400'),
   girlie: parseInt(process.env.VITE_GIRLIE_PERSONA_LIMIT || '70'),
-  pro: parseInt(process.env.VITE_PRO_PERSONA_LIMIT || '50'),
+  pro: parseInt(process.env.VITE_PRO_PERSONA_LIMIT || '200'),
 };
 
 // Anonymous trial. These are the numbers the UI shows, and they are enforced
