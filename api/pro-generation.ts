@@ -2,11 +2,14 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { tasks } from '@trigger.dev/sdk';
 import {
   AI_PERSONAS,
+  buildProviderChain,
   checkRateLimit,
   extractImageContent,
   fetchHealthcareRAGContext,
   fetchUserMemories,
   formatMemoriesForContext,
+  personaFallbacks,
+  runProviderNames,
 } from './ai-proxy.js';
 import { TOOL_GUARDRAIL, THINKING_DIRECTIVE, selectTools, resolveImageAllowed, resolveWebSearchAllowed, toApiMessages } from './_lib/tools.js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
@@ -69,8 +72,9 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Sign in to use TimeMachine PRO', type: 'authRequired' });
   }
 
+  const proProvider = (personaConfig as { provider?: string }).provider || 'pollinations';
   const limitOutcome = await checkRateLimit(userId, ip, 'pro', {
-    provider: (personaConfig as { provider?: string }).provider,
+    providers: runProviderNames(proProvider, personaConfig),
   });
   if (!limitOutcome.allowed) {
     if (limitOutcome.reason === 'backend_error' || limitOutcome.reason === 'spend_ceiling') {
@@ -141,7 +145,7 @@ ${thinkingDirective}`;
   const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
   const maxTokensToUse = specialModeConfig?.maxTokens ?? personaConfig.maxTokens;
   const reasoningEffortToUse: string | undefined = specialModeConfig?.reasoningEffort ?? (personaConfig as any).reasoningEffort;
-  const providerToUse: string = (personaConfig as any).provider || 'pollinations';
+  const providerToUse: string = proProvider;
 
   // Healthcare RAG (tm-healthcare special mode)
   if (specialMode === 'tm-healthcare') {
@@ -227,6 +231,11 @@ ${thinkingDirective}`;
     temperature: temperatureToUse,
     maxTokens: maxTokensToUse,
     provider: providerToUse,
+    // The whole chain travels with the job: the task runs on Trigger.dev and
+    // cannot resolve AI_PERSONAS' fallbacks for itself. Hops whose provider is
+    // out of budget for the day are dropped here, same as in /api/ai-proxy.
+    providerChain: buildProviderChain(providerToUse, modelToUse, personaFallbacks(personaConfig))
+      .filter(hop => limitOutcome.providers.includes(hop.provider)),
     reasoningEffort: reasoningEffortToUse,
     userId,
     ip,

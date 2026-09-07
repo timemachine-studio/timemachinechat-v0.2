@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AI_PERSONAS, buildProviderChain, personaFallbacks } from './ai-proxy';
+import { AI_PERSONAS, buildProviderChain, personaFallbacks, runProviderNames } from './ai-proxy';
 import {
   ProviderHttpError,
   runWithProviderFallback,
@@ -52,6 +52,60 @@ describe('Air provider chain', () => {
   it('reads no fallbacks off a persona that declares none', () => {
     expect(personaFallbacks(AI_PERSONAS.girlie)).toEqual([]);
     expect(personaFallbacks(undefined)).toEqual([]);
+  });
+});
+
+describe('PRO provider chain', () => {
+  const pro = AI_PERSONAS.pro;
+
+  it('runs the primary first, then each configured fallback in order', () => {
+    const chain = buildProviderChain(pro.provider, pro.model, personaFallbacks(pro));
+
+    expect(chain).toHaveLength(3);
+    expect(chain[0]).toEqual({ provider: pro.provider, model: pro.model });
+    expect(chain.slice(1)).toEqual(personaFallbacks(pro));
+  });
+
+  it('keeps two hops on the same provider when their models differ', () => {
+    // PRO's fallbacks are both Eaon. Dedup is per (provider, model) pair, so
+    // collapsing them to one would silently cost a hop.
+    const chain = buildProviderChain(pro.provider, pro.model, personaFallbacks(pro));
+    const eaon = chain.filter(hop => hop.provider === 'eaon');
+    expect(eaon).toHaveLength(2);
+    expect(new Set(eaon.map(hop => hop.model)).size).toBe(2);
+  });
+});
+
+describe('runProviderNames', () => {
+  const air = AI_PERSONAS.default;
+
+  it('names every provider the spend ceiling has to consider, primary first', () => {
+    // The ceiling runs before a model is resolved, so it works in names. If it
+    // saw only the primary it would refuse a turn two healthy providers could
+    // have served.
+    expect(runProviderNames(air.provider, air)).toEqual([
+      air.provider,
+      ...personaFallbacks(air).map(hop => hop.provider),
+    ]);
+  });
+
+  it('collapses a persona whose hops share a provider to one name', () => {
+    // The ceiling is per provider, so PRO's two Eaon hops are one budget.
+    expect(runProviderNames(AI_PERSONAS.pro.provider, AI_PERSONAS.pro)).toEqual(['nvidia', 'eaon']);
+  });
+
+  it('is just the primary for a persona with no fallbacks', () => {
+    expect(runProviderNames('groq', AI_PERSONAS.girlie)).toEqual(['groq']);
+  });
+
+  it('drops unknown names and repeats', () => {
+    expect(runProviderNames('groq', {
+      fallbacks: [
+        { provider: 'groq', model: 'other' },
+        { provider: 'nope', model: 'x' },
+        { provider: 'nvidia', model: 'y' },
+      ],
+    })).toEqual(['groq', 'nvidia']);
   });
 });
 
