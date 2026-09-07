@@ -55,6 +55,27 @@ describe('Air provider chain', () => {
   });
 });
 
+describe('PRO provider chain', () => {
+  const pro = AI_PERSONAS.pro;
+
+  it('runs the primary first, then each configured fallback in order', () => {
+    const chain = buildProviderChain(pro.provider, pro.model, personaFallbacks(pro));
+
+    expect(chain).toHaveLength(3);
+    expect(chain[0]).toEqual({ provider: pro.provider, model: pro.model });
+    expect(chain.slice(1)).toEqual(personaFallbacks(pro));
+  });
+
+  it('keeps two hops on the same provider when their models differ', () => {
+    // PRO's fallbacks are both Eaon. Dedup is per (provider, model) pair, so
+    // collapsing them to one would silently cost a hop.
+    const chain = buildProviderChain(pro.provider, pro.model, personaFallbacks(pro));
+    const eaon = chain.filter(hop => hop.provider === 'eaon');
+    expect(eaon).toHaveLength(2);
+    expect(new Set(eaon.map(hop => hop.model)).size).toBe(2);
+  });
+});
+
 describe('runProviderNames', () => {
   const air = AI_PERSONAS.default;
 
@@ -68,8 +89,13 @@ describe('runProviderNames', () => {
     ]);
   });
 
+  it('collapses a persona whose hops share a provider to one name', () => {
+    // The ceiling is per provider, so PRO's two Eaon hops are one budget.
+    expect(runProviderNames(AI_PERSONAS.pro.provider, AI_PERSONAS.pro)).toEqual(['nvidia', 'eaon']);
+  });
+
   it('is just the primary for a persona with no fallbacks', () => {
-    expect(runProviderNames('pollinations', AI_PERSONAS.pro)).toEqual(['pollinations']);
+    expect(runProviderNames('groq', AI_PERSONAS.girlie)).toEqual(['groq']);
   });
 
   it('drops unknown names and repeats', () => {

@@ -5,6 +5,7 @@ import {
   incrementRateLimit,
   processMemoryTags,
 } from "../api/ai-proxy.js";
+import { runWithProviderFallback, type ProviderHop } from "../api/_lib/providerResilience.js";
 import { createToolPolicy } from "../api/_lib/tools.js";
 import { runAgentLoop } from "../api/_lib/agentLoop.js";
 import { completeProJob, failProJob } from "../api/_lib/proJobs.js";
@@ -21,6 +22,11 @@ export interface ProGenerationPayload {
   temperature: number;
   maxTokens: number;
   provider: string;
+  /**
+   * Providers to try, in order, each with its own model. Optional: a job
+   * queued before this field existed still runs on `provider`/`model` alone.
+   */
+  providerChain?: ProviderHop[];
   reasoningEffort?: string;
   userId: string | null;
   ip: string;
@@ -88,6 +94,14 @@ export const proGeneration = task({
         searchAllowed: payload.searchAllowed !== false,
       });
 
+      // Opening a provider stream is the only retryable moment; once tokens are
+      // flowing there is no resume. A chain is only absent on a job queued
+      // before the field existed, so fall back to the single pair.
+      const providerChain: ProviderHop[] = payload.providerChain?.length
+        ? payload.providerChain
+        : [{ provider: normalizeStreamingProvider(payload.provider, "pollinations"), model: payload.model }];
+      let servedProvider = providerChain[0].provider;
+
       const loopResult = await runAgentLoop({
         messages: payload.apiMessages,
         tools: payload.tools,
@@ -102,17 +116,28 @@ export const proGeneration = task({
           emitToolText: (text) => emitText(`\n\n${text}\n\n`),
           emitMarker: (marker) => emitMarker(marker),
         },
-        callModel: (messages, activeTools) => dispatchStreamingProvider(
-          normalizeStreamingProvider(payload.provider, "pollinations"),
-          messages,
-          activeTools,
-          {
-            model: payload.model,
-            temperature: payload.temperature,
-            maxTokens: payload.maxTokens,
-            reasoningEffort: payload.reasoningEffort,
+        callModel: async (messages, activeTools) => {
+          const run = await runWithProviderFallback(
+            providerChain,
+            (hop) => dispatchStreamingProvider(
+              hop.provider,
+              messages,
+              activeTools,
+              {
+                model: hop.model,
+                temperature: payload.temperature,
+                maxTokens: payload.maxTokens,
+                reasoningEffort: payload.reasoningEffort,
+              }
+            ),
+            (message) => logger.log(`[pro] ${message}`),
+          );
+          servedProvider = run.provider;
+          if (run.provider !== providerChain[0].provider) {
+            logger.warn(`[pro] fell back from ${providerChain[0].provider} to ${run.provider}`);
           }
-        ),
+          return run.value;
+        },
         maxIterations: MAX_ITERATIONS,
         log: (message) => logger.log(message),
       });
@@ -126,10 +151,12 @@ export const proGeneration = task({
       }
 
       // Finalize rate limits & memories
-      const quotaCost = 1;
-      for (let i = 0; i < quotaCost; i++) {
-        await incrementRateLimit(payload.userId, payload.ip, "pro");
-      }
+      // Charged to the provider that actually served the run, so the daily
+      // spend ceiling reflects where the money went.
+      await incrementRateLimit(payload.userId, payload.ip, "pro", {
+        amount: 1,
+        provider: servedProvider,
+      });
 
       if (payload.userId && fullContent) {
         const memoryResult = await processMemoryTags(fullContent, payload.userId, "pro");

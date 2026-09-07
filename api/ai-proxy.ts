@@ -421,6 +421,13 @@ You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule wi
     initialMessage: "It's TimeMachine PRO, from future.",
     provider: 'nvidia',
     model: 'moonshotai/kimi-k3',
+    // Same contract as Air's chain above: tried in order, silently, and only
+    // an exhausted chain reaches the user. PRO runs as a Trigger.dev job, so
+    // the chain travels in the job payload (see api/pro-generation.ts).
+    fallbacks: [
+      { provider: 'eaon', model: 'logfare/kimi-k3' },
+      { provider: 'eaon', model: 'kimi-k3-extended' },
+    ],
     temperature: 0.8,
     maxTokens: 67200
   }
