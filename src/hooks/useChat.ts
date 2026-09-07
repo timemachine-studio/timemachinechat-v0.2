@@ -134,7 +134,6 @@ export function useChat(
   const [currentEmotion, setCurrentEmotion] = useState<string>('joy');
   const [error, setError] = useState<string | null>(null);
   const [showAboutUs, setShowAboutUs] = useState(false);
-  const [showRateLimitModal, setShowRateLimitModal] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string>(initialSession?.id || '');
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [useStreaming, setUseStreaming] = useState(true);
@@ -606,11 +605,6 @@ export function useChat(
     }
   }, [messages, currentSessionId, currentPersona, isCollaborative, saveChatSession]);
 
-  // Dismiss rate limit modal
-  const dismissRateLimitModal = useCallback(() => {
-    setShowRateLimitModal(false);
-  }, []);
-
   // Clear YouTube music
   const clearYoutubeMusic = useCallback(() => {
     setYoutubeMusic(null);
@@ -882,10 +876,12 @@ export function useChat(
           if (approvalReceived) return;
           console.error('Failed to generate streaming response:', error.message);
 
-          // Rate limits keep their dedicated modal — they are not about this
-          // one message, they are about the account.
+          // Every failure — rate limit included — now lands as an inline
+          // bubble on the turn that failed. The modal it used to raise was a
+          // full-screen interrupt for something that is about one message,
+          // and it blamed server load for what was usually a single provider
+          // having a bad minute.
           if (error && typeof error === 'object' && 'type' in error && (error as { type?: string }).type === 'rateLimit') {
-            setShowRateLimitModal(true);
             failTurn(aiMessageId, new ChatError('RATE_LIMITED', 'Rate limit exceeded'));
             return;
           }
@@ -984,7 +980,6 @@ export function useChat(
       console.error('Failed to generate response:', error instanceof Error ? error.message : error);
 
       if (error && typeof error === 'object' && 'type' in error && (error as { type?: string }).type === 'rateLimit') {
-        setShowRateLimitModal(true);
         failTurn(aiMessageId, new ChatError('RATE_LIMITED', 'Rate limit exceeded'));
         return;
       }
@@ -1572,7 +1567,6 @@ export function useChat(
     currentEmotion,
     error,
     showAboutUs,
-    showRateLimitModal,
     streamingMessageId,
     useStreaming,
     youtubeMusic,
@@ -1592,7 +1586,6 @@ export function useChat(
     startNewChat,
     markMessageAsAnimated,
     dismissAboutUs,
-    dismissRateLimitModal,
     loadChat,
     setUseStreaming,
     clearYoutubeMusic,

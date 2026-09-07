@@ -20,8 +20,8 @@ import {
   assertOwnUserId,
 } from './_lib/auth.js';
 import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
-import { apiErrorBody, sendApiError } from './_lib/errors.js';
-import { providerFetch, runWithProviderFallback, type ProviderHop } from './_lib/providerResilience.js';
+import { apiErrorBody, sendApiError, STATUS_FOR_CODE } from './_lib/errors.js';
+import { providerFetch, runWithProviderFallback, ProviderHttpError, type ProviderHop } from './_lib/providerResilience.js';
 import { aiProxyBodySchema, parseOrReject, rejectIfTooLarge } from './_lib/validation.js';
 import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
 
@@ -51,7 +51,19 @@ export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'groq', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-    model: 'qwen/qwen3.8-27b',
+    model: 'qwen/qwen3.6-27b',
+    // Air's fallback chain, in order. If the primary above fails for any
+    // reason — 429, 5xx, timeout, missing key, unknown model — the run moves
+    // to the next entry without the user seeing anything. Only when every
+    // entry here has failed does the turn surface an error in the chat.
+    //
+    // Each entry must name a model that provider actually serves. A hop
+    // pointed at a model id the provider does not have fails worse than no
+    // hop at all, so do not add one without a verified (provider, model) pair.
+    fallbacks: [
+      { provider: 'eaon', model: 'glm-5.2-extended' },
+      { provider: 'nvidia', model: 'openai/gpt-oss-20b' },
+    ],
     temperature: 0.8,
     maxTokens: 9304,
     flowState: {
@@ -2222,23 +2234,53 @@ export function resolveRunProvider(
   return normalizeStreamingProvider(personaConfig.provider || 'groq', 'groq');
 }
 
-// Fallback chain for the Air persona: one provider's bad minute should not be
-// an outage (production-check.md 1.11).
-//
-// Each hop names a model that provider actually serves. Both alternates are
-// (provider, model) pairs this deployment already uses elsewhere — Groq for
-// the Girlie persona, and the Cerebras default in callCerebrasAirAPIStreaming.
-// A fallback pointed at a model id the provider does not have fails worse than
-// no fallback at all, so do not add a hop without a verified pair.
-const AIR_FALLBACK_HOPS: ProviderHop[] = [
-  { provider: 'groq', model: 'meta-llama/llama-4-scout-17b-16e-instruct' },
-  { provider: 'cerebras', model: 'qwen-3-235b-a22b-instruct-2507' },
-];
+/**
+ * The ordered list of (provider, model) pairs a run may use: the persona's
+ * primary first, then whatever `fallbacks` that persona declares.
+ *
+ * One provider's bad minute should not be an outage (production-check.md
+ * 1.11). The chain is read from the persona config rather than hardcoded here
+ * so the whole routing decision lives in one place — AI_PERSONAS at the top of
+ * this file — instead of being split across two definitions that can drift.
+ *
+ * Special modes and Flow State override the model but not the fallbacks, so a
+ * hop still runs its own configured model. Duplicate (provider, model) pairs
+ * are dropped: retrying the exact same pair after it just failed only adds
+ * latency before the error the user actually sees.
+ */
+export function buildProviderChain(
+  provider: string,
+  model: string,
+  fallbacks: ProviderHop[] = [],
+): ProviderHop[] {
+  const chain: ProviderHop[] = [];
+  const seen = new Set<string>();
 
-export function buildProviderChain(persona: string, provider: string, model: string): ProviderHop[] {
-  const primary: ProviderHop = { provider, model };
-  if (persona !== 'default') return [primary];
-  return [primary, ...AIR_FALLBACK_HOPS.filter(hop => hop.provider !== provider)];
+  for (const hop of [{ provider, model }, ...fallbacks]) {
+    if (!hop?.provider || !hop?.model) continue;
+    // A hop naming a provider with no dispatch branch would fall through to
+    // the `default:` case and be sent to Cerebras under someone else's model
+    // id — a fallback that fails in a more confusing way than no fallback.
+    if (!STREAMING_PROVIDERS.has(hop.provider)) {
+      console.warn(`[provider] skipping unknown fallback provider '${hop.provider}'`);
+      continue;
+    }
+    const key = `${hop.provider}:${hop.model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    chain.push({ provider: hop.provider, model: hop.model });
+  }
+
+  // The primary may itself have been dropped as unknown; never return nothing.
+  return chain.length > 0 ? chain : [{ provider, model }];
+}
+
+/** The declared fallbacks for a persona, if it has any. */
+export function personaFallbacks(personaConfig: unknown): ProviderHop[] {
+  const declared = (personaConfig as { fallbacks?: unknown })?.fallbacks;
+  if (!Array.isArray(declared)) return [];
+  return declared.filter((hop): hop is ProviderHop =>
+    Boolean(hop) && typeof hop.provider === 'string' && typeof hop.model === 'string');
 }
 
 interface StreamingModelConfig {
@@ -2583,7 +2625,7 @@ ${thinkingDirective}`;
         // yields a stream or throws before a single byte reaches the client.
         // Once tokens are flowing there is no resume, so a mid-stream death
         // surfaces as truncated instead (1.9/1.11).
-        const providerChain = buildProviderChain(persona, runProvider, runModel);
+        const providerChain = buildProviderChain(runProvider, runModel, personaFallbacks(personaConfig));
 
         const loopResult = await runAgentLoop({
           messages: apiMessages,
@@ -3200,16 +3242,26 @@ ${thinkingDirective}`;
       return;
     }
 
-    // Check for rate limit errors
+    // An upstream provider saying 429 is not the caller hitting *their* quota.
+    // These used to be string-matched into RATE_LIMITED, which is why a busy
+    // minute at Groq surfaced to beta testers as "you've used up your
+    // messages" — an account-level popup for what was really a transient
+    // capacity blip on one provider, already handled by the fallback chain.
+    // RATE_LIMITED is now reserved for the quota check above; everything a
+    // provider does becomes PROVIDER_DOWN, which the client renders as a
+    // retryable bubble on the failed turn.
+    if (error instanceof ProviderHttpError) {
+      return res.status(STATUS_FOR_CODE.PROVIDER_DOWN).json(
+        apiErrorBody('PROVIDER_DOWN', 'Every model provider failed for this turn.')
+      );
+    }
+
     if (errorMessage.includes('Rate limit') || errorMessage.includes('429')) {
       return res.status(429).json(
         apiErrorBody('RATE_LIMITED', 'Rate limit exceeded', { type: 'rateLimit' })
       );
     }
 
-    return res.status(500).json(apiErrorBody(
-      'UNKNOWN',
-      'We are facing huge load on our servers and thus we\'ve had to temporarily limit access to maintain system stability. Please be patient, we hate this as much as you do but this thing doesn\'t grow on trees :")'
-    ));
+    return res.status(500).json(apiErrorBody('UNKNOWN', 'The request failed.'));
   }
 }

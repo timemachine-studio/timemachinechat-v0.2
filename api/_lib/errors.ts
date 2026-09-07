@@ -15,7 +15,7 @@ export type ApiErrorCode =
   | 'UNAVAILABLE'
   | 'UNKNOWN';
 
-const STATUS_FOR_CODE: Record<ApiErrorCode, number> = {
+export const STATUS_FOR_CODE: Record<ApiErrorCode, number> = {
   RATE_LIMITED: 429,
   AUTH_REQUIRED: 401,
   AUTH_EXPIRED: 401,

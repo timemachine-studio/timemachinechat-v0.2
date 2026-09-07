@@ -20,7 +20,6 @@ import { ThemeProvider, useTheme } from './context/ThemeContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ChatMode } from './components/chat/ChatMode';
 import { StageMode } from './components/chat/StageMode';
-import { RateLimitModal } from './components/modals/RateLimitModal';
 import { WelcomeModal } from './components/modals/WelcomeModal';
 import { AuthModal, OnboardingModal, AccountPage } from './components/auth';
 import { PrivacyPage, TermsPage } from './components/legal';
@@ -176,7 +175,6 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     currentEmotion,
     error,
     showAboutUs,
-    showRateLimitModal,
     streamingMessageId,
     youtubeMusic,
     loadingPhase,
@@ -194,7 +192,6 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     startNewChat,
     markMessageAsAnimated,
     dismissAboutUs,
-    dismissRateLimitModal,
     loadChat,
     clearYoutubeMusic,
     enableCollaborativeMode,
@@ -1110,11 +1107,6 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
           isVisible={showAboutUs}
           onClose={dismissAboutUs}
           currentPersona={currentPersona}
-        />
-
-        <RateLimitModal
-          isOpen={showRateLimitModal}
-          onClose={dismissRateLimitModal}
         />
 
         <AuthModal
