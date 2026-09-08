@@ -1,3 +1,5 @@
+import type { ModelConfig, SpecialModeConfig, VisionCapability } from './_lib/providerTypes.js';
+import type { ProviderMessage, ProviderTool } from './_lib/providerTypes.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { tasks } from '@trigger.dev/sdk';
 import {
@@ -29,6 +31,26 @@ import {
 } from './_lib/proJobs.js';
 import type { ProGenerationPayload } from '../trigger/proGeneration.js';
 import { proGenerationBodySchema, parseOrReject, rejectIfTooLarge } from './_lib/validation.js';
+import {
+  applyOcrVision,
+  collectAttachments,
+  hasAttachments,
+  resolveVisionMode,
+  selectOcrImages,
+  selectVisionImages,
+  type VisionHop,
+} from './_lib/vision.js';
+
+/**
+ * How much inline image data may travel in a PRO job payload.
+ *
+ * PRO's model call happens on Trigger.dev, so anything the task needs has to
+ * be serialised into the payload. Hosted image URLs are a few hundred bytes;
+ * base64 data URLs are megabytes, and the composer only falls back to those
+ * when an upload failed. Above this budget the route transcribes the image
+ * itself and ships the text, trading the better answer for a job that starts.
+ */
+const PRO_INLINE_IMAGE_BUDGET = 512 * 1024;
 
 // ─── TimeMachine PRO: background generation entry point ─────────────────────
 // POST /api/pro-generation  → validates quota, builds the full prompt/messages
@@ -90,8 +112,8 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
   }
 
   // ─── Prompt building — mirrors the pro branch of /api/ai-proxy ──────────
-  const specialModeConfig = specialMode && (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode]
-    ? (SPECIAL_MODE_CONFIGS as Record<string, any>)[specialMode]['pro']
+  const specialModeConfig = specialMode && (SPECIAL_MODE_CONFIGS as Record<string, Record<'default' | 'girlie' | 'pro', SpecialModeConfig>>)[specialMode]
+    ? (SPECIAL_MODE_CONFIGS as Record<string, Record<'default' | 'girlie' | 'pro', SpecialModeConfig>>)[specialMode]['pro']
     : null;
 
   let systemPrompt: string;
@@ -135,7 +157,7 @@ ${thinkingDirective}`;
   // Decided in code, not asked of the model: see api/_lib/tools.ts.
   const imageAllowed = resolveImageAllowed(messages, !!imageData);
   const searchAllowed = resolveWebSearchAllowed(messages);
-  const toolsToUse: any[] = selectTools({
+  const toolsToUse: ProviderTool[] = selectTools({
     specialModeConfig,
     includeSkills: true,
     imageAllowed,
@@ -144,13 +166,13 @@ ${thinkingDirective}`;
 
   const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
   const maxTokensToUse = specialModeConfig?.maxTokens ?? personaConfig.maxTokens;
-  const reasoningEffortToUse: string | undefined = specialModeConfig?.reasoningEffort ?? (personaConfig as any).reasoningEffort;
+  const reasoningEffortToUse: string | undefined = specialModeConfig?.reasoningEffort ?? (personaConfig as ModelConfig).reasoningEffort;
   const providerToUse: string = proProvider;
 
   // Healthcare RAG (tm-healthcare special mode)
   if (specialMode === 'tm-healthcare') {
     const recentMessages = messages.slice(-6);
-    const combinedText = recentMessages.map((m: any) => m.content).join(' ');
+    const combinedText = recentMessages.map((m) => m.content).join(' ');
     if (combinedText.trim()) {
       const ragContext = await fetchHealthcareRAGContext(combinedText);
       if (ragContext) {
@@ -160,7 +182,7 @@ ${thinkingDirective}`;
   }
 
   // Build apiMessages (pro always uses a system prompt)
-  const apiMessages: any[] = [
+  const apiMessages: ProviderMessage[] = [
     { role: 'system', content: systemPromptToUse },
     ...toApiMessages(messages),
   ];
@@ -170,8 +192,10 @@ ${thinkingDirective}`;
   if (pdfTextContent && apiMessages.length > 0) {
     const lastMsgIndex = apiMessages.length - 1;
     const lastMsg = apiMessages[lastMsgIndex];
-    const isPlaceholderOnly = lastMsg.content?.startsWith('[PDF:') || lastMsg.content?.startsWith('[File:');
-    const userPrompt = isPlaceholderOnly ? '' : (lastMsg.content || '');
+    // Runs before any image parts are attached, so content is still a string.
+    const lastText = typeof lastMsg.content === 'string' ? lastMsg.content : '';
+    const isPlaceholderOnly = lastText.startsWith('[PDF:') || lastText.startsWith('[File:');
+    const userPrompt = isPlaceholderOnly ? '' : lastText;
     const ext = pdfFileName?.split('.').pop()?.toLowerCase() || '';
     const isPdf = ext === 'pdf';
     const fileLabel = pdfFileName ? `"${pdfFileName}"` : (isPdf ? 'the uploaded PDF' : 'the uploaded file');
@@ -187,36 +211,62 @@ ${thinkingDirective}`;
     apiMessages[lastMsgIndex] = { ...lastMsg, content: enrichedContent };
   }
 
-  // Image OCR pipeline (same enrichment as /api/ai-proxy)
-  const hasImageInput = !!imageData;
-  const imageUrlsForOCR = hasImageInput ? (Array.isArray(imageData) ? imageData : [imageData]) : [];
-
-  if (hasImageInput && imageUrlsForOCR.length > 0) {
-    try {
-      const extractedText = await extractImageContent(imageUrlsForOCR);
-
-      const lastMsgIndex = apiMessages.length - 1;
-      const lastMsg = apiMessages[lastMsgIndex];
-      const userPrompt = lastMsg.content === '[Image message]' ? '' : lastMsg.content;
-
-      const imageEditContext = `\n\n[IMPORTANT: The user has attached ${imageUrlsForOCR.length} image(s) to this message. If the user is asking to edit, modify, or transform the image — use the generate_image tool with process="edit" and write a detailed prompt describing the desired result. The image URLs and dimensions are automatically handled by the system.]`;
-
-      const enrichedContent = userPrompt
-        ? `[Content extracted from the attached image(s):\n${extractedText}\n]${imageEditContext}\n\nUser's message: ${userPrompt}`
-        : `[Content extracted from the attached image(s):\n${extractedText}\n]\n\nThe user shared this image. Respond based on the extracted content above.`;
-
-      apiMessages[lastMsgIndex] = { ...lastMsg, content: enrichedContent };
-    } catch (ocrError) {
-      console.error('Image OCR pipeline error (pro-generation):', ocrError);
-      const lastMsgIndex = apiMessages.length - 1;
-      const lastMsg = apiMessages[lastMsgIndex];
-      const userPrompt = lastMsg.content === '[Image message]' ? '' : lastMsg.content;
-      apiMessages[lastMsgIndex] = {
-        ...lastMsg,
-        content: userPrompt
-          ? `[The user attached an image but text extraction failed. Please respond to their message as best you can. If the user wanted to edit the image, use the generate_image tool with process="edit" and describe what the user wants.]\n\nUser's message: ${userPrompt}`
-          : `[The user attached an image but text extraction failed. Let them know you couldn't process the image and ask them to try again.]`,
+  // ─── Vision ─────────────────────────────────────────────────────────────
+  // K3 takes image parts, so PRO normally sends the image itself and never
+  // transcribes. The chain is built here rather than at payload-assembly time
+  // because the decision below depends on what is in it.
+  const primaryCapability: VisionCapability = specialModeConfig
+    ? { vision: specialModeConfig.vision, imageTransport: specialModeConfig.imageTransport }
+    : {
+        vision: personaConfig.vision,
+        imageTransport: (personaConfig as ModelConfig).imageTransport,
       };
+
+  const providerChain = buildProviderChain(
+    providerToUse,
+    modelToUse,
+    personaFallbacks(personaConfig),
+    primaryCapability,
+  ).filter(hop => limitOutcome.providers.includes(hop.provider));
+
+  const attachments = collectAttachments(imageData, inputImageUrls);
+  const hasImageInput = hasAttachments(attachments);
+  const imageIndex = apiMessages.length - 1;
+
+  // Images that travel with the job, for the task to attach or transcribe as
+  // whichever hop serves the run requires. Empty means the route already
+  // settled it and the messages are final.
+  let visionImages: string[] = [];
+
+  if (hasImageInput) {
+    const chainCanSee = providerChain.some(hop => resolveVisionMode(hop as VisionHop) === 'native');
+    const selected = selectVisionImages(attachments, primaryCapability.imageTransport);
+    const inlineBytes = selected.reduce(
+      (total, image) => total + (image.startsWith('data:') ? image.length : 0),
+      0,
+    );
+
+    if (chainCanSee && selected.length > 0 && inlineBytes <= PRO_INLINE_IMAGE_BUDGET) {
+      visionImages = selected;
+    } else {
+      // No hop on this chain can see, or the images are too big to serialise
+      // into the payload: transcribe here and send text, as PRO always did.
+      //
+      // Logged because the second case is a silent quality downgrade with an
+      // upstream cause worth knowing about — it only happens when the
+      // composer's image upload failed and left nothing but base64 behind.
+      console.warn(
+        `[pro] vision falling back to transcription (chainCanSee=${chainCanSee}, inlineBytes=${inlineBytes})`,
+      );
+      const ocrImages = selectOcrImages(attachments);
+      let extractedText: string | null = null;
+      try {
+        extractedText = await extractImageContent(ocrImages);
+      } catch (ocrError) {
+        console.error('Image OCR pipeline error (pro-generation):', ocrError);
+      }
+      const enriched = applyOcrVision(apiMessages, imageIndex, ocrImages.length, extractedText);
+      apiMessages.splice(0, apiMessages.length, ...enriched);
     }
   }
 
@@ -234,14 +284,16 @@ ${thinkingDirective}`;
     // The whole chain travels with the job: the task runs on Trigger.dev and
     // cannot resolve AI_PERSONAS' fallbacks for itself. Hops whose provider is
     // out of budget for the day are dropped here, same as in /api/ai-proxy.
-    providerChain: buildProviderChain(providerToUse, modelToUse, personaFallbacks(personaConfig))
-      .filter(hop => limitOutcome.providers.includes(hop.provider)),
+    // Each hop carries its own vision capability, so the task can shape the
+    // messages for whichever one ends up serving the run.
+    providerChain,
     reasoningEffort: reasoningEffortToUse,
     userId,
     ip,
     inputImageUrls,
     imageDimensions,
-    hadImageInput: hasImageInput && imageUrlsForOCR.length > 0,
+    hadImageInput: hasImageInput,
+    ...(visionImages.length > 0 ? { visionImages, visionImageIndex: imageIndex } : {}),
     imageAllowed,
     searchAllowed,
   };
@@ -303,6 +355,7 @@ async function handleGet(req: VercelRequest, res: VercelResponse) {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   applyCors(req, res, 'GET, POST, OPTIONS');
+  res.setHeader('Cache-Control', 'no-store');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();

@@ -1,3 +1,4 @@
+import type { ProviderTool } from './providerTypes.js';
 // Single source of truth for tool definitions, tool selection and tool execution.
 //
 // Before this module existed, tool selection was duplicated across
@@ -6,9 +7,8 @@
 // landed in some copies and not others, which is why they never fully stuck.
 // Everything tool-related now lives here; call sites supply an emitter.
 
-import { SKILLS_DATA } from '../skills.js';
-
-const POLLINATIONS_API_KEY = (process.env.POLLINATIONS_API_KEY || '').trim();
+import { SKILLS_DATA } from '../../shared/skills.js';
+import { runWebSearch, formatResultsForModel } from './webSearch.js';
 
 // ─── Tool definitions ───────────────────────────────────────────────────────
 
@@ -118,7 +118,7 @@ export const readSkillTool = {
   }
 };
 
-export const TOOL_MAP: Record<string, any> = {
+export const TOOL_MAP: Record<string, ProviderTool> = {
   imageGeneration: imageGenerationTool,
   webSearch: webSearchTool,
   listSkills: listSkillsTool,
@@ -177,20 +177,8 @@ export function createImageMarkdown(params: ImageGenerationParams): string {
 
 export async function fetchWebSearchResults(params: WebSearchParams): Promise<string> {
   const { query } = params;
-  const encodedQuery = encodeURIComponent(query);
-
-  const url = `https://gen.pollinations.ai/text/${encodedQuery}?model=perplexity-fast&key=${POLLINATIONS_API_KEY}`;
-
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Web search failed: ${response.status}`);
-    }
-    return await response.text();
-  } catch (error) {
-    console.error('Web search error:', error);
-    throw error;
-  }
+  const response = await runWebSearch(query);
+  return formatResultsForModel(response);
 }
 
 // ─── Tool selection ─────────────────────────────────────────────────────────
@@ -306,7 +294,7 @@ export interface SelectToolsOptions {
  * like `web-coding` opt out of tools entirely — but the image gate applies on
  * top of it either way.
  */
-export function selectTools(opts: SelectToolsOptions): any[] {
+export function selectTools(opts: SelectToolsOptions): ProviderTool[] {
   const {
     specialModeConfig,
     includeSkills = false,
@@ -314,7 +302,7 @@ export function selectTools(opts: SelectToolsOptions): any[] {
     hasAttachedImage = false,
   } = opts;
 
-  let tools: any[] = specialModeConfig && Array.isArray(specialModeConfig.tools)
+  let tools: ProviderTool[] = specialModeConfig && Array.isArray(specialModeConfig.tools)
     ? specialModeConfig.tools.map((t: string) => TOOL_MAP[t]).filter(Boolean)
     : [webSearchTool, imageGenerationTool];
 
@@ -403,7 +391,7 @@ export function createToolPolicy(opts: { imageAllowed: boolean; searchAllowed?: 
 }
 
 /** Drop tools revoked earlier in this run from the list sent to the model. */
-export function applyPolicy(tools: any[], policy?: ToolPolicy | null): any[] {
+export function applyPolicy(tools: ProviderTool[], policy?: ToolPolicy | null): ProviderTool[] {
   if (!policy || policy.revoked.size === 0) return tools;
   return tools.filter((t) => !policy.revoked.has(t?.function?.name));
 }
@@ -473,8 +461,8 @@ export async function executeTool(
       await emit.emitMarker(`[STATUS:Searching the web for "${params.query}"]`);
       const searchResults = await fetchWebSearchResults(params);
       return searchResults.slice(0, SEARCH_RESULT_LIMIT);
-    } catch (err: any) {
-      return `Error: ${err.message}`;
+    } catch (err: unknown) {
+      return `Error: ${(err instanceof Error ? (err instanceof Error ? (err instanceof Error ? (err instanceof Error ? err.message : String(err)) : String(err)) : String(err)) : String(err))}`;
     }
   }
 
@@ -507,8 +495,8 @@ export async function executeTool(
 
       await emit.emitText(imageMarkdown);
       return `Image generated successfully. Markdown link: ${imageMarkdown}`;
-    } catch (err: any) {
-      return `Error: ${err.message}`;
+    } catch (err: unknown) {
+      return `Error: ${(err instanceof Error ? (err instanceof Error ? (err instanceof Error ? (err instanceof Error ? err.message : String(err)) : String(err)) : String(err)) : String(err))}`;
     }
   }
 
@@ -520,8 +508,8 @@ export async function executeTool(
         description: SKILLS_DATA[key].description
       }));
       return JSON.stringify(list, null, 2);
-    } catch (err: any) {
-      return `Error: ${err.message}`;
+    } catch (err: unknown) {
+      return `Error: ${(err instanceof Error ? (err instanceof Error ? (err instanceof Error ? (err instanceof Error ? err.message : String(err)) : String(err)) : String(err)) : String(err))}`;
     }
   }
 
@@ -534,8 +522,8 @@ export async function executeTool(
         return skill.content;
       }
       return `Error: Skill "${params.name}" not found. Available skills: ${Object.keys(SKILLS_DATA).join(', ')}`;
-    } catch (err: any) {
-      return `Error: ${err.message}`;
+    } catch (err: unknown) {
+      return `Error: ${(err instanceof Error ? (err instanceof Error ? (err instanceof Error ? (err instanceof Error ? err.message : String(err)) : String(err)) : String(err)) : String(err))}`;
     }
   }
 

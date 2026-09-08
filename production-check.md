@@ -1,5 +1,7 @@
 # TimeMachine Chat — Production Readiness Plan
 
+> 2026-09-07 verification update: the owner-requested lint cleanup passes with **0 errors and 0 warnings**, without rule suppressions. Typecheck, 90 tests and build pass; existing CSS import-order and bundle-size build warnings remain. TM-02 live retention/deletion checks remain open; see `status.md` and `docs/agent/data-lifecycle.md`. Historical counts below describe earlier checkpoints.
+
 **Audit date:** 2026-08-26 · **Commit:** `1bb2d6c` · **Target:** soft launch
 **Scope:** full codebase read (45k LOC, 210 TS/TSX files) + live app driven in a browser + direct API probing.
 
@@ -604,6 +606,8 @@ Add a catch-all `<NotFoundPage />` with navigation back into the app, and `<SEOH
 ### 1.5 — Add abort, timeout, and retry to AI requests ✅
 
 > **Done 2026-08-27.** An `AbortSignal` is threaded through `generateAIResponseStreaming`; the send button becomes **Stop** while generating; 60s time-to-first-token and 180s total budgets abort and surface a typed `TIMEOUT`; retryable failures retry twice with exponential backoff + jitter, and never after tokens have streamed. Aborting on unmount and on chat switch stops paying for orphaned generations. Verified live: Stop halts a running stream, keeps the partial text and shows "Generation stopped."
+>
+> **Follow-up 2026-09-08.** Stop was only wired to the transport, so it did nothing on the paths the signal never reached: the PRO run (`streamProRun` ignored the signal entirely, and its reconnect loop would have resumed the cancelled stream anyway) and the non-streaming fallback (`generateAIResponse` took no signal). It was also absent from the home-page composer, which never received `onStop`. `stopGeneration` is now authoritative in the UI — it settles the turn itself (partial text kept as the answer, an empty one becomes an `ABORTED` error), and every transport callback for a stopped turn is dropped so a late chunk cannot resurrect it. The signal now reaches all three request paths.
 
 **Severity:** High · **Effort:** M · **Files:** `src/services/ai/aiProxyService.ts`, `src/hooks/useChat.ts`, `api/ai-proxy.ts`
 
@@ -943,6 +947,8 @@ This is an architecture change, not a bug fix, so it gets its own gate. Sequence
 ---
 
 ### LS.1 — One honest privacy claim  ✱ read this before writing any marketing
+
+> TM-02 local update (2026-09-06): signup/privacy/account copy now describes actual cloud history and external processing; unsupported device-only and immediate-erasure claims were removed. Durable PRO creation is blocked pending verified processor retention. Cleanup hooks and local tests are implemented, but service settings, staging deletion, backups and the production rollout remain unverified. See `docs/agent/data-lifecycle.md`. Gate LS remains open; D1 still supersedes blanket no-sync/table-drop instructions below.
 
 **Severity:** Critical (positioning + legal) · **Effort:** S
 
@@ -1464,7 +1470,7 @@ Raised at the end of the Gate 0 pass, fixed immediately after.
 |---|---|
 | `rate_limits` readable with the anon key | **New** `supabase/migrations/rate_limits_rls.sql` — enables + forces RLS with no policy, and revokes the `anon`/`authenticated` grants. Service role is unaffected. **Must be applied by hand in the Supabase SQL editor.** |
 | Missing service-role key becomes a silent outage | `ai-proxy.ts` now logs a loud boot error when `SUPABASE_SERVICE_ROLE_KEY` is unset, because with the RLS migration applied the anon fallback can no longer read `rate_limits` and every request 503s. |
-| `WebViewerView.tsx` sandbox | `allow-same-origin` removed. Verified live: with it, a frame resolving to our origin read `top.localStorage` (5 keys, including the Supabase session); without it every access throws `SecurityError`, and Google search with `igu=1` still loads. |
+| `WebViewerView.tsx` sandbox | `allow-same-origin` removed. Verified live: with it, a frame resolving to our origin read `top.localStorage` (5 keys, including the Supabase session); without it every access throws `SecurityError`. (Sept 2026: the `igu=1` Google-search frame this row once cited no longer loads at all — Google answers a `/sorry` bot-check redirect. Search now renders our own results from `/api/search?web=`; only direct URLs are framed.) |
 | Web viewer URL construction | **Real hole, worse than first reported.** `trimmed.startsWith('http')` is not a scheme check — it also matches `httpfoo.com`, which was used as an iframe `src` verbatim and resolved *relative to our own origin*, framing our own app with `allow-scripts`. New `toSafeExternalUrl()` normalises to an absolute `http(s)` URL and rejects `javascript:` / `data:` / anything else. |
 | Provider derivation drift | `resolveRunProvider()` is now the single source of truth. The spend ceiling and the dispatch previously derived the provider separately with different fallbacks, so the ceiling could bill `nvidia` for a run that went to Cerebras. |
 | `CLAUDE.md` stale in three places | Rewritten: personas, provider routing, identity/rate-limit rules, env vars, iframe + URL rules, real error counts, and the fact that signed-in chats still go to Supabase today. |
