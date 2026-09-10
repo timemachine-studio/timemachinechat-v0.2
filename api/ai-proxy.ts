@@ -2,21 +2,26 @@ import type { Database } from '../src/types/database.js';
 import type { HealthcareBrand } from '../shared/healthcare.js';
 import type { ModelConfig, SpecialModeConfig, VisionCapability } from './_lib/providerTypes.js';
 import type { ProviderMessage, ProviderTool, ProviderRequest, ProviderResponse } from './_lib/providerTypes.js';
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './_lib/vercelTypes.js';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
+import { enabledMcpServers, enabledSkills, loadUserMcpServers, resolveFlightControlsCached } from './_lib/flightControls.js';
+import { discoverMcpToolsCached } from './_lib/mcpClient.js';
+import { mcpToolDescriptors } from './_lib/mcpCatalog.js';
+import { createMcpApprovalRequester } from './_lib/mcpApprovalRequest.js';
 import {
-  TOOL_GUARDRAIL,
+  buildToolGuardrail,
   THINKING_DIRECTIVE,
+  buildAppToolDirective,
   toApiMessages,
-  selectTools,
-  resolveImageAllowed,
-  resolveWebSearchAllowed,
+  selectToolSet,
   createToolPolicy,
   applyPolicy,
   executeTool,
+  type UserSkill,
 } from './_lib/tools.js';
 import { runAgentLoop } from './_lib/agentLoop.js';
+import { type DeviceToolRequestFrame } from '../shared/deviceTools.js';
 import {
   getAuthenticatedRequestUser,
   getRequestAccessToken,
@@ -24,7 +29,7 @@ import {
   assertOwnUserId,
 } from './_lib/auth.js';
 import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
-import { apiErrorBody, sendApiError, STATUS_FOR_CODE } from './_lib/errors.js';
+import { apiErrorBody, sendApiError, CONTROL_FRAME_PREFIX, STATUS_FOR_CODE } from './_lib/errors.js';
 import { providerFetch, runWithProviderFallback, ProviderHttpError, type ProviderHop } from './_lib/providerResilience.js';
 import {
   OCR_MODEL,
@@ -85,9 +90,31 @@ export const AI_PERSONAS = {
     // `vision` is per hop because the hops disagree: neither of these two can
     // see, so a turn that falls through to one of them gets the image
     // transcribed at that point — and only at that point.
+    // Ordered by how dependable each hop has actually been, not by preference:
+    // the earlier a hop sits, the more often a stall on it costs a user 45s
+    // before the chain moves on. nvidia is the one that has answered
+    // consistently, so it goes first. AMD and LLM7 both work but both have
+    // hung for tens of seconds during testing, so they sit behind it — by the
+    // time a turn reaches them, two providers are already down.
     fallbacks: [
-      { provider: 'eaon', model: 'glm-5.2-extended', vision: 'ocr' as const },
-      { provider: 'pollinations', model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' as const },
+      { provider: 'nvidia', model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning', vision: 'ocr' as const },
+      // OCR, not native: the endpoint answers an image_url part with a hard
+      // 400, "Model DeepSeek-V4-Flash does not support image input." Verified
+      // against the live API, per the rule above about unverified guesses.
+      { provider: 'amd', model: 'DeepSeek-V4-Flash', vision: 'ocr' as const },
+      // `default` is LLM7's free-tier routing selector, not a model id.
+      //
+      // minimax-m2.7 was the requested model and is a one-line change back —
+      // but it is priced ($0.03/$0.05 per 1M) and this key has no balance, so
+      // it never answers: ten consecutive attempts timed out at 45s, while
+      // priced models that fail cleanly return `insufficient_balance`. A hop
+      // that cannot succeed is worse than no hop, because the chain still
+      // waits out the timeout before moving on. `default` was verified end to
+      // end through this dispatch path: a real tool call in 5.0s.
+      //
+      // The free tier allows 100 requests an hour, which is thin for a primary
+      // but fine here — this hop is only reached when three providers are down.
+      { provider: 'llm7', model: 'default', vision: 'ocr' as const },
     ],
     temperature: 0.8,
     maxTokens: 9304,
@@ -101,23 +128,66 @@ export const AI_PERSONAS = {
       maxTokens: 9304,
       quotaCost: 4
     },
-    systemPrompt: `You are TimeMachine Air, an AI companion by TimeMachine Engineering. A friend, not an assistant.
+    systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
 
-PHILOSOPHY: Truth over comfort — stop bad decisions like a real friend would. Read between the lines ("I'm fine" often isn't). Explain simply, with analogies. Use humor when it fits the mood, never forced.
+You're the friend who knows everything, tells the truth even when it's uncomfortable, and actually wants the user to win.
 
-TONE: Casual, sharp, text-a-smart-friend energy; contractions, natural phrasing. Match the user's energy; dial back jokes when they're hurting, get firm when they're making excuses. Length matches need; short is fine. Occasional cursing OK if it fits. *Italics* for emphasis, **bold** for weight, sparingly.
+## Core Philosophy
+- **Truth over comfort.** Real friends stop you from bad decisions. That's you.
+- **Understand before responding.** Read between the lines. "I'm fine" sometimes isn't.
+- **Simple over complex.** Best explanation = clearest one. Use analogies constantly.
+- **Humor as connection.** Funny when it fits. Never forced. Read the room.
 
-HONESTY: Never flatter bad ideas. Call out what's wrong, explain why, then give the better path. Roast the idea, not the person. Note repeated patterns bluntly ("third time we've hit this wall"). If unsure, say so and separate fact from opinion. Update your view when wrong, no ego.
+## Tone & Style
+- Casual but sharp. Text-a-smart-friend energy. Contractions, slang, natural phrasing.
+- Adapt your energy: match excitement, dial down jokes when someone's hurting, go firm when someone's making excuses.
+- Short responses are fine when that's all it takes. Not everything needs an essay.
+- You can curse if it fits the vibe. Don't overdo it.
+- Use *italics* for emphasis, **bold** for weight, sparingly.
 
-PROBLEM-SOLVING: Diagnose the real issue before prescribing. Offer tradeoffs plainly (e.g., "fast path vs. right path, here's why I'd pick—"). Always explain the *why*.
+## Honesty Rules
+- When the user is wrong: "Nah, that's not how it works — [why] — here's what does."
+- Bad idea? Call it out directly, then offer what actually works.
+- Never kiss ass. Don't validate objectively bad ideas just to be nice.
+- Roast the idea, never the person.
+- Spot repeated patterns: "Real talk, this is the third time we've hit this same wall."
 
-EMOTIONAL RANGE: Validate feelings AND address reality; both, always. Know pep talk vs. tough love. Celebrate wins with genuine hype. Never condescending; empathy isn't fragility-management.
+## Problem-Solving
+- Diagnose before prescribing. Understand the real problem first.
+- Offer options: "Path A = fast. Path B = right. I'd go B because..."
+- Always explain *why*, not just *what*.
+- Be upfront about tradeoffs.
 
-TOOLS: Web search for anything current/real-time. For images: ask consent first, only generate after explicit user confirmation in a following message, never unprompted.
+## Emotional Intelligence
+- Validate feelings + address reality. Both. Not one or the other.
+- Know when someone needs a pep talk vs. tough love.
+- Celebrate wins genuinely. Be hyped for them.
+- Never condescending. Empathy ≠ treating people like they're fragile.
 
-IDENTITY (share only if asked): Made by TimeMachine Engineering, founded by Tanzim (Tanzim Infinity). Mission: AI for the betterment of humanity. One of three resonators: Air, PRO, and Girlie.
+## Uncertainty
+- If you don't know, say so: "I'm not sure, but here's what I do know..."
+- Distinguish fact from opinion.
+- Update your stance if you're wrong. No ego about it.
 
-Overall: smart, not condescending; funny, not mean; honest, not harsh for sport. Sound like someone who actually gives a damn.
+## Quick Scenario Reference
+- **User is wrong:** "Nah hold up. [why]. what you want is [better approach]."
+- **Bad idea:** "Real talk? That plan has issues. [Why]. Here's what'd actually work."
+- **Making excuses:** "I'm gonna be honest with you. Sounds like excuses. What's really stopping you?"
+- **Big win:** "Yooo that's huge! Told ya. What's next?"
+- **Stuck:** "Alright let's break it down. What part specifically is tripping you up?"
+- **Upset:** [Drop jokes] "Hey, that sounds really rough. Want to talk through it?"
+
+## Image & Search
+- Web search: use it for anything current, real-time, or recent.
+- Images: always ask the user first before generating. Then after the user confirms they want it, call the tool in the next response. Never generate without explicit consent and unless they explicitly ask you to.
+
+## Background (don't say out loud unless asked)
+- Created by TimeMachine Engineering. Owner: Tanzim (aka Tanzim Infinity). Tony Stark-level mindset, deeply cares about user safety and privacy.
+- Mission: *Artificial Intelligence for the betterment of humanity.*
+- You are one of 3 resonators: TimeMachine Air, TimeMachine PRO and TimeMachine Girlie.
+
+You're smart but never condescending. Funny but never mean. Honest but never harsh for sport. Every response should feel like it came from someone who genuinely gives a damn and care about the user. That's the vibe.
+Now go be the best AI friend anyone's ever had.
 
 CRUTIAL: If you face any hard question or task, you can think for longer before answering by reasoning inside <reason></reason> tags. You reasoning must be inside these XML tags, this is not for the user, it's for you to evaluate and reason you're own thoughts, use this for something like counting the number of a letter in a word, math problems, riddles and such. Only use this technique when you think that extended reasoning is necessary, and for simple questions just answer straight away.
 `,
@@ -648,6 +718,12 @@ const EAON_API_URL = 'https://api.eaon.dev/v1/chat/completions';
 const NVIDIA_API_KEY = (process.env.NVIDIA_API_KEY || process.env.NIM_API_KEY || '').trim();
 const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
+// AMD Radeon Cloud configuration
+const AMD_API_URL = 'https://developer.amd.com.cn/radeon/api/v1/chat/completions';
+
+// LLM7 configuration
+const LLM7_API_URL = 'https://api.llm7.io/v1/chat/completions';
+
 
 // Memory tool params (MemoryParams kept for reference)
 // interface MemoryParams { content: string; }
@@ -1071,10 +1147,10 @@ async function bumpBucket(
         windowExpired
           ? { message_count: amount, window_start: now.toISOString(), updated_at: now.toISOString() }
           : {
-              // Never let a refund drive the counter below zero.
-              message_count: Math.max(0, (existing.message_count ?? 0) + amount),
-              updated_at: now.toISOString(),
-            },
+            // Never let a refund drive the counter below zero.
+            message_count: Math.max(0, (existing.message_count ?? 0) + amount),
+            updated_at: now.toISOString(),
+          },
       )
       .eq('id', existing.id);
     return;
@@ -1470,9 +1546,13 @@ export async function callSecretsToAIAPIStreaming(
     requestBody.tool_choice = "auto";
   }
 
+  // Shape, never content. Every provider adapter logs a count here, not the
+  // messages themselves: these run in production logs, and since the device
+  // tools landed the message array carries the user's own notes and past
+  // conversations. See the security rules in CLAUDE.md.
   console.log('Secrets to AI API Request:', {
     model,
-    messages: cleanedMessages,
+    messageCount: cleanedMessages.length,
     url: SECRETSTOAI_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -1607,7 +1687,7 @@ export async function callNvidiaAPIStreaming(
 
   console.log('Nvidia API Request:', {
     model,
-    messages: cleanedMessages,
+    messageCount: cleanedMessages.length,
     url: NVIDIA_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -1746,7 +1826,7 @@ export async function callEaonAPIStreaming(
 
   console.log('Eaon API Request:', {
     model,
-    messages: cleanedMessages,
+    messageCount: cleanedMessages.length,
     url: EAON_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -1843,6 +1923,282 @@ export async function callEaonAPIStreaming(
   });
 }
 
+// ─── Generic OpenAI-compatible adapter ──────────────────────────────────────
+//
+// Every provider above is the same request with a different key, URL and
+// label, and each one carries its own near-identical copy of the SSE parser.
+// production-check.md 3.5 tracks collapsing them; this is that adapter, added
+// with AMD rather than as a big-bang rewrite of six working call sites.
+//
+// New providers should use it. The existing six migrate onto it one at a
+// time, under their own tests — a fallback chain is not a good place to find
+// out that two parsers disagreed about a corner of the wire format.
+
+interface OpenAiCompatibleProvider {
+  /** Label used for circuit-breaker state, latency stats and error messages. */
+  label: string;
+  url: string;
+  apiKey: string;
+  /** Names the environment variable in the "not configured" error. */
+  keyName: string;
+  /**
+   * Which reasoning-suppression fields this gateway tolerates.
+   *
+   * The three below are sent to every existing provider on the theory that an
+   * unknown field is ignored. That is not universally true: LLM7 validates the
+   * request body strictly and answers `thinking_budget` with a 400, so every
+   * call would fail. Verified by sending each field on its own —
+   * `reasoning_effort` and `thinking` are accepted there, `thinking_budget` is
+   * not. Default keeps the historical behaviour for AMD and anything added
+   * after it.
+   */
+  suppressReasoning?: {
+    thinkingBudget?: boolean;
+    reasoningEffort?: boolean;
+    thinking?: boolean;
+  };
+}
+
+function openAiCompatibleBody(
+  provider: OpenAiCompatibleProvider,
+  messages: ProviderMessage[],
+  model: string,
+  temperature: number,
+  maxTokens: number | undefined,
+  tools: ProviderTool[] | undefined,
+  stream: boolean,
+): { body: ProviderRequest; messageCount: number } {
+  // A system message is always plain text; the parts form only ever appears on
+  // the user turn a native-vision run attached images to, and that one is
+  // never empty.
+  const cleanedMessages = messages.filter(msg =>
+    msg.role !== 'system' || (typeof msg.content === 'string' ? msg.content.trim() !== '' : !!msg.content)
+  );
+
+  const suppress = provider.suppressReasoning ?? {};
+  const body: ProviderRequest = {
+    model,
+    messages: cleanedMessages,
+    temperature,
+    stream,
+  };
+  // --- Thinking/Reasoning Deactivation, per what the gateway accepts ---
+  if (suppress.thinkingBudget !== false) body.thinking_budget = 0;   // Gemini / open-source routers
+  if (suppress.reasoningEffort !== false) body.reasoning_effort = "none"; // OpenAI-style routers
+  if (suppress.thinking !== false) body.thinking = null;             // Anthropic-style routers
+  if (maxTokens) body.max_tokens = maxTokens;
+  if (tools && tools.length > 0) {
+    body.tools = tools;
+    body.tool_choice = "auto";
+  }
+
+  return { body, messageCount: cleanedMessages.length };
+}
+
+/**
+ * Turn an OpenAI-style SSE response into this codebase's newline-delimited
+ * `{ type: 'content' | 'tool_calls' | 'finish' }` frames.
+ *
+ * Two things the existing copies handle only by accident and this one on
+ * purpose. SSE carries comment lines (`: ping`) and `id:` lines alongside
+ * `data:` — AMD sends both — and they are skipped because only `data: ` is
+ * read. And `reasoning_content`, which DeepSeek-family models emit next to
+ * `content`, is deliberately dropped: it is the model's scratchpad, not the
+ * answer, and this codebase already has its own `<reason>` mechanism.
+ */
+function openAiCompatibleStream(response: Response, label: string): ReadableStream {
+  return new ReadableStream({
+    async start(controller) {
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+      const emit = (frame: unknown) => controller.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`));
+      let buffer = '';
+
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed === 'data: [DONE]' || !trimmed.startsWith('data: ')) continue;
+
+            try {
+              const data = JSON.parse(trimmed.slice(6));
+              const choice = data.choices?.[0];
+              if (!choice) continue;
+
+              if (choice.delta?.content) emit({ type: 'content', content: choice.delta.content });
+              if (choice.delta?.tool_calls) emit({ type: 'tool_calls', tool_calls: choice.delta.tool_calls });
+              if (choice.finish_reason) emit({ type: 'finish', reason: choice.finish_reason });
+            } catch (error) {
+              void error;
+              console.error(`provider_stream_parse_failed:${label}`);
+            }
+          }
+        }
+
+        emit({ type: 'finish' });
+        controller.close();
+      } catch (error) {
+        controller.error(error);
+      }
+    }
+  });
+}
+
+export async function callOpenAiCompatibleStreaming(
+  provider: OpenAiCompatibleProvider,
+  messages: ProviderMessage[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: ProviderTool[]
+): Promise<ReadableStream> {
+  if (!provider.apiKey) {
+    throw new Error(`${provider.keyName} is not configured for ${provider.label} requests`);
+  }
+
+  const { body, messageCount } = openAiCompatibleBody(provider, messages, model, temperature, maxTokens, tools, true);
+
+  // messageCount, never the messages themselves — CLAUDE.md's security rules
+  // forbid logging prompt content, and tool results now carry note text and
+  // fetched pages through here.
+  console.log(`${provider.label} API Request:`, {
+    model,
+    messageCount,
+    url: provider.url,
+    hasTools: !!(tools && tools.length > 0),
+    toolCount: tools?.length || 0
+  });
+
+  const response = await providerFetch(provider.url, {
+    providerLabel: provider.label,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}` },
+    body: JSON.stringify(body)
+  });
+
+  if (!response.body) throw new Error(`No response body from ${provider.label} API`);
+  return openAiCompatibleStream(response, provider.label);
+}
+
+export async function callOpenAiCompatible(
+  provider: OpenAiCompatibleProvider,
+  messages: ProviderMessage[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: ProviderTool[]
+): Promise<ProviderResponse> {
+  if (!provider.apiKey) {
+    throw new Error(`${provider.keyName} is not configured for ${provider.label} requests`);
+  }
+
+  const { body, messageCount } = openAiCompatibleBody(provider, messages, model, temperature, maxTokens, tools, false);
+
+  console.log(`${provider.label} API Request (non-streaming):`, {
+    model,
+    messageCount,
+    url: provider.url,
+    hasTools: !!(tools && tools.length > 0),
+    toolCount: tools?.length || 0
+  });
+
+  const response = await providerFetch(provider.url, {
+    providerLabel: provider.label,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${provider.apiKey}` },
+    body: JSON.stringify(body)
+  });
+
+  return await response.json();
+}
+
+// ─── AMD Radeon Cloud ───────────────────────────────────────────────────────
+// OpenAI-compatible, streams tool_calls deltas in the standard shape, and
+// sends SSE `: ping` comment and `id:` lines that the adapter skips.
+
+export const AMD_PROVIDER: OpenAiCompatibleProvider = {
+  label: 'amd',
+  url: AMD_API_URL,
+  // Read at call time, not at module load. The other providers capture their
+  // key in a module-scope const, which makes them untestable without the real
+  // key in the environment and makes a key added after cold start invisible.
+  get apiKey() { return (process.env.AMD_API_KEY || '').trim(); },
+  keyName: 'AMD_API_KEY',
+};
+
+export function callAmdAPIStreaming(
+  messages: ProviderMessage[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: ProviderTool[]
+): Promise<ReadableStream> {
+  return callOpenAiCompatibleStreaming(AMD_PROVIDER, messages, model, temperature, maxTokens, tools);
+}
+
+export function callAmdAPI(
+  messages: ProviderMessage[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: ProviderTool[]
+): Promise<ProviderResponse> {
+  return callOpenAiCompatible(AMD_PROVIDER, messages, model, temperature, maxTokens, tools);
+}
+
+// ─── LLM7 ───────────────────────────────────────────────────────────────────
+// An OpenAI-compatible gateway in front of many upstream models, rather than a
+// single model behind an endpoint. Tool calling was verified against it and
+// comes back in the standard shape.
+//
+// **None of the three reasoning-suppression fields may be sent.** LLM7
+// forwards the request body to whichever upstream serves the model, and the
+// upstreams disagree about what they accept: `thinking_budget` is rejected
+// outright, and `reasoning_effort` is accepted by minimax-m2.7's upstream but
+// answered with a 400 by the one behind `default`. Since the model is chosen
+// per hop, any of them can break a call. All three are off here — a 400 fails
+// the turn, while a model that reasons out loud is only verbose.
+//
+// It also streams the whole answer as one chunk rather than token by token.
+// The adapter handles that; it just means a turn served by LLM7 appears all at
+// once instead of typing out.
+
+export const LLM7_PROVIDER: OpenAiCompatibleProvider = {
+  label: 'llm7',
+  url: LLM7_API_URL,
+  get apiKey() { return (process.env.LLM7_API_KEY || '').trim(); },
+  keyName: 'LLM7_API_KEY',
+  suppressReasoning: { thinkingBudget: false, reasoningEffort: false, thinking: false },
+};
+
+export function callLlm7APIStreaming(
+  messages: ProviderMessage[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: ProviderTool[]
+): Promise<ReadableStream> {
+  return callOpenAiCompatibleStreaming(LLM7_PROVIDER, messages, model, temperature, maxTokens, tools);
+}
+
+export function callLlm7API(
+  messages: ProviderMessage[],
+  model: string,
+  temperature: number = 1,
+  maxTokens?: number,
+  tools?: ProviderTool[]
+): Promise<ProviderResponse> {
+  return callOpenAiCompatible(LLM7_PROVIDER, messages, model, temperature, maxTokens, tools);
+}
+
 // Pollinations API function for external AI models (streaming)
 export async function callPollinationsAPIStreaming(
   messages: ProviderMessage[],
@@ -1864,16 +2220,16 @@ export async function callPollinationsAPIStreaming(
   );
 
   const requestBody: ProviderRequest = {
-  model: model,
-  messages: cleanedMessages,
-  temperature,
-  stream: true,
+    model: model,
+    messages: cleanedMessages,
+    temperature,
+    stream: true,
 
-  // --- Bulletproof Thinking/Reasoning Deactivation ---
-  thinking_budget: 0,          // Maps to Gemini / Open-source routers
-  reasoning_effort: "none",    // Maps to OpenAI-style routers
-  thinking: null               // Maps to Anthropic-style routers
-};
+    // --- Bulletproof Thinking/Reasoning Deactivation ---
+    thinking_budget: 0,          // Maps to Gemini / Open-source routers
+    reasoning_effort: "none",    // Maps to OpenAI-style routers
+    thinking: null               // Maps to Anthropic-style routers
+  };
 
   if (maxTokens) {
     requestBody.max_tokens = maxTokens;
@@ -1886,7 +2242,7 @@ export async function callPollinationsAPIStreaming(
 
   console.log('Pollinations API Request:', {
     model,
-    messages: cleanedMessages,
+    messageCount: cleanedMessages.length,
     url: POLLINATIONS_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -2022,7 +2378,7 @@ async function callSecretsToAIAPI(
 
   console.log('Secrets to AI API Request (non-streaming):', {
     model,
-    messages: cleanedMessages,
+    messageCount: cleanedMessages.length,
     url: SECRETSTOAI_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -2085,7 +2441,7 @@ async function callNvidiaAPI(
 
   console.log('Nvidia API Request (non-streaming):', {
     model,
-    messages: cleanedMessages,
+    messageCount: cleanedMessages.length,
     url: NVIDIA_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -2152,7 +2508,7 @@ async function callEaonAPI(
 
   console.log('Eaon API Request (non-streaming):', {
     model,
-    messages: cleanedMessages,
+    messageCount: cleanedMessages.length,
     url: EAON_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -2215,7 +2571,7 @@ async function callPollinationsAPI(
 
   console.log('Pollinations API Request (non-streaming):', {
     model,
-    messages: cleanedMessages,
+    messageCount: cleanedMessages.length,
     url: POLLINATIONS_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -2247,7 +2603,7 @@ async function callPollinationsAPI(
 
 const STREAMING_PROVIDERS = new Set([
   'groq', 'pollinations', 'secretstoai', 'secrectstoai',
-  'eaon', 'nvidia', 'nim', 'cerebras',
+  'eaon', 'nvidia', 'nim', 'cerebras', 'amd', 'llm7',
 ]);
 
 /** Map a configured provider name onto a supported one, preserving each persona's historical fallback. */
@@ -2391,6 +2747,10 @@ export async function dispatchStreamingProvider(
     case 'nvidia':
     case 'nim':
       return callNvidiaAPIStreaming(messages, model, temperature, maxTokens, tools);
+    case 'amd':
+      return callAmdAPIStreaming(messages, model, temperature, maxTokens, tools);
+    case 'llm7':
+      return callLlm7APIStreaming(messages, model, temperature, maxTokens, tools);
     case 'cerebras':
     default:
       return callCerebrasAirAPIStreaming(messages, tools, model, temperature, maxTokens);
@@ -2453,7 +2813,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const body = parseOrReject(res, aiProxyBodySchema, req.body);
     if (!body) return;
 
-    const { messages, persona, imageData, heatLevel, stream, flowState, inputImageUrls, imageDimensions, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText } = body;
+    const { messages, persona, imageData, heatLevel, stream, flowState, inputImageUrls, imageDimensions, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText, deviceApps, deviceDataPresent, deviceRounds, toolTranscript } = body;
 
     const personaConfig = AI_PERSONAS[persona as keyof typeof AI_PERSONAS];
 
@@ -2549,23 +2909,81 @@ The memory tags will be processed and removed from the visible response, so writ
     // the thinking directive.
     const thinkingDirective = specialMode === 'music-compose' ? '' : THINKING_DIRECTIVE;
 
-    const enhancedSystemPrompt = `${systemPrompt}${memoryContext}${memoryInstructions}
-
-${TOOL_GUARDRAIL}
-${thinkingDirective}`;
-
     // Initialize model, system prompt, and tools — apply special mode overrides
     const modelToUse = specialModeConfig?.model || personaConfig.model;
-    let systemPromptToUse = enhancedSystemPrompt;
-    // Decided in code, not asked of the model: see api/_lib/tools.ts.
-    const imageAllowed = resolveImageAllowed(messages, !!imageData);
-    const searchAllowed = resolveWebSearchAllowed(messages);
-    const toolsToUse: ProviderTool[] = selectTools({
+    // The device bridge only exists on the streaming path: it works by ending
+    // the response and letting the client start the next leg, which the
+    // one-shot JSON path has no way to do.
+    const deviceAppsEnabled = stream ? (deviceApps ?? []) : [];
+    // Which tools this turn gets is decided by the catalogue — see
+    // shared/toolCatalog.ts. The whole decision comes back, not just the list,
+    // because find_tools needs to know what was left out.
+    // Flight Controls: what this user switched on. Anonymous users get none,
+    // and the result is cached per instance — see flightControls.ts. Until
+    // this call existed the toggles in the Flight Controls UI reached nothing:
+    // a skill a user enabled never entered a prompt.
+    const flightControls = await resolveFlightControlsCached(userId);
+    const userSkills: UserSkill[] = enabledSkills(flightControls.enabled).map(control => ({
+      slug: control.slug,
+      name: control.name,
+      description: control.description,
+      content: control.skill_content || '',
+    }));
+    // Slugs the catalog owns. A built-in skill the user switched off must not
+    // come back through SKILLS_DATA, or the toggle only works one way.
+    const governedSkillSlugs = flightControls.governedSkillSlugs;
+
+    // The user's enabled MCP servers, discovered and put on the catalogue.
+    // Cached per instance: discovery is a connect plus tools/list per server,
+    // and doing that on every message would be the dominant cost of a turn.
+    // A server that is down yields no tools and the turn proceeds without it —
+    // never a failed message because someone else's host is unreachable.
+    // Curated servers the user enabled, plus the ones they added themselves.
+    // Both end up in the same shape and are dialled by the same client; the
+    // only difference is where the credential came from.
+    const mcpServers = enabledMcpServers([
+      ...flightControls.enabled,
+      ...(stream ? await loadUserMcpServers(userId) : []),
+    ]);
+    const mcpTools = mcpServers.length > 0 && stream
+      ? await discoverMcpToolsCached(mcpServers)
+      : [];
+    const mcpDescriptors = mcpToolDescriptors(mcpTools);
+
+    const toolSet = selectToolSet({
       specialModeConfig,
-      includeSkills: persona === 'pro',
-      imageAllowed,
-      searchAllowed,
+      // PRO always has the library. Everyone else gets the skills tools only
+      // once they have actually enabled a skill — otherwise two schemas ride
+      // on every Air message to reach a library the user never opted into.
+      includeSkills: persona === 'pro' || userSkills.length > 0,
+      messages,
+      hasAttachedImage: !!imageData,
+      hasAttachedPdf: !!(pdfData || pdfExtractedText),
+      deviceApps: deviceAppsEnabled,
+      deviceDataPresent,
+      deviceRoundsUsed: deviceRounds,
+      surface: persona === 'pro' ? 'pro' : 'air',
+      extraDescriptors: mcpDescriptors,
     });
+    const toolsToUse: ProviderTool[] = toolSet.tools;
+    const offeredToolNames = toolsToUse.map(tool => tool.function.name);
+    // The policies below derive their gates from what the request actually
+    // carried rather than recomputing them, so a tool the token budget dropped
+    // is refused if the model calls it anyway.
+
+    const enhancedSystemPrompt = `${systemPrompt}${memoryContext}${memoryInstructions}
+
+${buildToolGuardrail({ canFindTools: toolSet.canFindTools })}
+${thinkingDirective}`;
+    let systemPromptToUse = enhancedSystemPrompt;
+
+    const appToolsOffered = toolsToUse.some(tool => tool.function.name === 'healthcare_search'
+      || tool.function.name.startsWith('notes_') || tool.function.name.startsWith('chats_'));
+    const deviceToolsOffered = toolsToUse.some(tool =>
+      tool.function.name.startsWith('notes_') || tool.function.name.startsWith('chats_'));
+    // The client can run them and simply has none left, as opposed to never
+    // having declared it could run them at all. Only the first is worth saying.
+    const deviceRoundsSpent = deviceAppsEnabled.length > 0 && !deviceToolsOffered;
 
     // Apply temperature, maxTokens, and reasoningEffort overrides from special mode
     const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
@@ -2584,6 +3002,12 @@ ${thinkingDirective}`;
           systemPromptToUse = systemPromptToUse + ragContext;
         }
       }
+    }
+
+    // Only when the tools are actually in front of the model — a special mode
+    // that opted out of tools must not be told it can reach the user's apps.
+    if (appToolsOffered) {
+      systemPromptToUse = systemPromptToUse + buildAppToolDirective({ toolNames: toolsToUse.map(tool => tool.function.name), deviceRoundsSpent });
     }
 
     // PDF handling: text extraction is done on the frontend (pdfjs-dist).
@@ -2636,6 +3060,17 @@ ${thinkingDirective}`;
       apiMessages[lastMsgIndex] = { ...lastMsg, content: enrichedContent };
     }
 
+    // Where the user's own last turn sits, captured before the device
+    // transcript is appended after it. Images belong to that message, not to
+    // whatever a resumed run happens to end with.
+    const lastUserMessageIndex = apiMessages.length - 1;
+
+    // Resuming a suspended run: the assistant turn that called the device
+    // tools, and their results, replayed so the model sees what it asked for.
+    if (toolTranscript && toolTranscript.length > 0) {
+      apiMessages.push(...(toolTranscript as ProviderMessage[]));
+    }
+
     // Handle streaming vs non-streaming responses
     if (stream) {
       // Set up streaming response headers
@@ -2682,7 +3117,7 @@ ${thinkingDirective}`;
         // model instead of being spliced into the user's response, which is what
         // lets the runtime backstop refuse a bad generate_image call and have the
         // model recover on the next iteration.
-        const toolPolicy = createToolPolicy({ imageAllowed, searchAllowed });
+        const toolPolicy = createToolPolicy({ offered: offeredToolNames });
 
         // Opening a provider stream is the only retryable moment: it either
         // yields a stream or throws before a single byte reaches the client.
@@ -2700,11 +3135,11 @@ ${thinkingDirective}`;
         // spent the primary's budget and capped it early.
         let servedProvider = runProvider;
 
-        // The index of the user message carrying the images. Captured now,
-        // before the agent loop starts appending assistant and tool messages
-        // after it — "the last message" stops being the right one on the
-        // second iteration.
-        const imageIndex = apiMessages.length - 1;
+        // The index of the user message carrying the images. Captured before
+        // the loop starts appending assistant and tool messages after it —
+        // "the last message" stops being the right one on the second
+        // iteration, and on a resumed run it was never right to begin with.
+        const imageIndex = lastUserMessageIndex;
 
         // Once any token has reached the client, a status marker written after
         // it would flip the UI back to "Analyzing photo…" mid-answer. The
@@ -2713,13 +3148,13 @@ ${thinkingDirective}`;
 
         const adaptForHop = hasImageInput
           ? createVisionAdapter({
-              attachments,
-              imageIndex,
-              extractText: extractImageContent,
-              onOcrStart: () => { if (!hasStreamedContent) res.write('[IMAGE_ANALYZING]'); },
-              onOcrEnd: () => { if (!hasStreamedContent) res.write('[IMAGE_ANALYZED]'); },
-              log: (message) => console.log(`[${persona}] ${message}`),
-            })
+            attachments,
+            imageIndex,
+            extractText: extractImageContent,
+            onOcrStart: () => { if (!hasStreamedContent) res.write('[IMAGE_ANALYZING]'); },
+            onOcrEnd: () => { if (!hasStreamedContent) res.write('[IMAGE_ANALYZED]'); },
+            log: (message) => console.log(`[${persona}] ${message}`),
+          })
           : passThroughVisionAdapter;
 
         // A native hop never writes [IMAGE_ANALYZING], so the client — which
@@ -2732,7 +3167,32 @@ ${thinkingDirective}`;
         const loopResult = await runAgentLoop({
           messages: apiMessages,
           tools: runTools,
-          toolContext: { persona, inputImageUrls, imageDimensions, policy: toolPolicy },
+          toolContext: {
+            persona,
+            inputImageUrls,
+            imageDimensions,
+            policy: toolPolicy,
+            healthcareSearch: fetchHealthcareRAGContext,
+            findable: toolSet.findable,
+            userSkills,
+            governedSkillSlugs,
+            mcpTools,
+          },
+          deviceBridge: deviceAppsEnabled.length > 0,
+          // Only when there is something that could need approving. Without a
+          // signed-in user there is no row to write and no card to show.
+          requestMcpApproval: (userId && mcpTools.some(tool => tool.requiresApproval))
+            ? createMcpApprovalRequester({
+                userId,
+                chatSessionId: typeof body.chatSessionId === 'string' ? body.chatSessionId : null,
+                mcpTools,
+                provider: servedProvider,
+                model: modelToUse,
+                temperature: temperatureToUse,
+                maxTokens: maxTokensToUse,
+                reasoningEffort: reasoningEffortToUse,
+              })
+            : undefined,
           emit: {
             emitContent: (text) => { hasStreamedContent = true; res.write(text); },
             emitToolText: (text) => { hasStreamedContent = true; res.write(`\n\n${text}\n\n`); },
@@ -2777,6 +3237,44 @@ ${thinkingDirective}`;
           },
           log: (message) => console.log(`[${persona}] ${message}`),
         });
+
+        // The model asked for something only the browser can do. End this leg
+        // cleanly — sentinel and all, because nothing failed — and let the
+        // client run the calls and start the next one. Quota and memory are
+        // deliberately not touched here: one user turn is charged once, on
+        // whichever leg produces the answer.
+        // The user has to answer before anything runs. Unlike the device
+        // suspension there is no next leg from the client: /api/mcp-approval
+        // finishes the turn if they say yes.
+        if (loopResult.mcpApproval) {
+          res.write(CONTROL_FRAME_PREFIX + JSON.stringify({
+            type: 'mcp_approval',
+            payload: loopResult.mcpApproval,
+          }) + '\n');
+          res.write('[STATUS_END]');
+          res.end();
+          return;
+        }
+
+        if (loopResult.deviceSuspension) {
+          const frame: DeviceToolRequestFrame = {
+            type: 'device_tool_request',
+            payload: {
+              assistantContent: loopResult.deviceSuspension.assistantContent,
+              toolCalls: loopResult.deviceSuspension.allToolCalls.map(call => ({
+                id: call.id,
+                name: call.function.name,
+                arguments: call.function.arguments || '{}',
+              })),
+              resolvedResults: loopResult.deviceSuspension.resolvedResults,
+              deviceRounds: deviceRounds + 1,
+            },
+          };
+          res.write(CONTROL_FRAME_PREFIX + JSON.stringify(frame) + '\n');
+          res.write('[STATUS_END]');
+          res.end();
+          return;
+        }
 
         let fullContent = loopResult.content;
 
@@ -2917,6 +3415,22 @@ ${thinkingDirective}`;
               flowConfig.maxTokens,
               toolsToUse
             );
+          } else if (fsProvider === 'amd') {
+            apiResponse = await callAmdAPI(
+              apiMessages,
+              flowConfig.model,
+              flowConfig.temperature,
+              flowConfig.maxTokens,
+              toolsToUse
+            );
+          } else if (fsProvider === 'llm7') {
+            apiResponse = await callLlm7API(
+              apiMessages,
+              flowConfig.model,
+              flowConfig.temperature,
+              flowConfig.maxTokens,
+              toolsToUse
+            );
           } else {
             const requestBody: ProviderRequest = {
               model: flowConfig.model,
@@ -3005,6 +3519,22 @@ ${thinkingDirective}`;
               maxTokensToUse,
               toolsToUse
             );
+          } else if (airProvider === 'amd') {
+            apiResponse = await callAmdAPI(
+              apiMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              toolsToUse
+            );
+          } else if (airProvider === 'llm7') {
+            apiResponse = await callLlm7API(
+              apiMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              toolsToUse
+            );
           } else {
             const requestBody: ProviderRequest = {
               model: modelToUse,
@@ -3053,7 +3583,7 @@ ${thinkingDirective}`;
         let iteration = 0;
         const maxIterations = 5;
         let finalContent = '';
-        const toolPolicy = createToolPolicy({ imageAllowed, searchAllowed });
+        const toolPolicy = createToolPolicy({ offered: offeredToolNames });
 
         while (iteration < maxIterations) {
           iteration++;
@@ -3082,6 +3612,22 @@ ${thinkingDirective}`;
             );
           } else if (proProvider === 'nvidia' || proProvider === 'nim') {
             apiResponse = await callNvidiaAPI(
+              currentMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              activeTools
+            );
+          } else if (proProvider === 'amd') {
+            apiResponse = await callAmdAPI(
+              currentMessages,
+              modelToUse,
+              temperatureToUse,
+              maxTokensToUse,
+              activeTools
+            );
+          } else if (proProvider === 'llm7') {
+            apiResponse = await callLlm7API(
               currentMessages,
               modelToUse,
               temperatureToUse,
@@ -3159,12 +3705,12 @@ ${thinkingDirective}`;
             for (const toolCall of toolCalls) {
               const result = await executeTool(
                 toolCall,
-                { persona, inputImageUrls, imageDimensions, policy: toolPolicy },
+                { persona, inputImageUrls, imageDimensions, policy: toolPolicy, findable: toolSet.findable, userSkills, governedSkillSlugs, mcpTools },
                 {
                   // Non-streaming: image markdown is folded into the final content,
                   // and status markers have nowhere to go.
                   emitText: (text) => { finalContent += (finalContent ? '\n\n' : '') + text; },
-                  emitMarker: () => {},
+                  emitMarker: () => { },
                 }
               );
 
@@ -3242,6 +3788,22 @@ ${thinkingDirective}`;
             maxTokensToUse,
             toolsToUse
           );
+        } else if (provider === 'amd') {
+          apiResponse = await callAmdAPI(
+            apiMessages,
+            modelToUse,
+            temperatureToUse,
+            maxTokensToUse,
+            toolsToUse
+          );
+        } else if (provider === 'llm7') {
+          apiResponse = await callLlm7API(
+            apiMessages,
+            modelToUse,
+            temperatureToUse,
+            maxTokensToUse,
+            toolsToUse
+          );
         } else if (provider === 'pollinations') {
           apiResponse = await callPollinationsAPI(
             apiMessages,
@@ -3305,15 +3867,15 @@ ${thinkingDirective}`;
       // runtime backstop apply here too.
       const toolCalls = apiResponse.choices?.[0]?.message?.tool_calls || [];
       if (toolCalls.length > 0) {
-        const toolPolicy = createToolPolicy({ imageAllowed, searchAllowed });
+        const toolPolicy = createToolPolicy({ offered: offeredToolNames });
 
         for (const toolCall of toolCalls) {
           const result = await executeTool(
             toolCall,
-            { persona, inputImageUrls, imageDimensions, policy: toolPolicy },
+            { persona, inputImageUrls, imageDimensions, policy: toolPolicy, findable: toolSet.findable, userSkills, governedSkillSlugs, mcpTools },
             {
               emitText: (text) => { fullContent += `\n\n${text}`; },
-              emitMarker: () => {},
+              emitMarker: () => { },
             }
           );
 

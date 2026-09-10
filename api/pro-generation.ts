@@ -1,6 +1,6 @@
 import type { ModelConfig, SpecialModeConfig, VisionCapability } from './_lib/providerTypes.js';
 import type { ProviderMessage, ProviderTool } from './_lib/providerTypes.js';
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './_lib/vercelTypes.js';
 import { tasks } from '@trigger.dev/sdk';
 import {
   AI_PERSONAS,
@@ -13,7 +13,8 @@ import {
   personaFallbacks,
   runProviderNames,
 } from './ai-proxy.js';
-import { TOOL_GUARDRAIL, THINKING_DIRECTIVE, selectTools, resolveImageAllowed, resolveWebSearchAllowed, toApiMessages } from './_lib/tools.js';
+import { buildToolGuardrail, THINKING_DIRECTIVE, buildAppToolDirective, selectToolSet, toApiMessages, type UserSkill } from './_lib/tools.js';
+import { enabledSkills, resolveFlightControlsCached } from './_lib/flightControls.js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import {
   getAuthenticatedRequestUser,
@@ -79,6 +80,10 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     pdfFileName,
     pdfExtractedText,
     chatSessionId,
+    deviceApps,
+    deviceDataPresent,
+    deviceRounds,
+    toolTranscript,
   } = body;
 
   // Identify the user from the Supabase access token (falls back to anonymous)
@@ -146,23 +151,50 @@ The memory tags will be processed and removed from the visible response, so writ
 
   const thinkingDirective = specialMode === 'music-compose' ? '' : THINKING_DIRECTIVE;
 
-  const enhancedSystemPrompt = `${systemPrompt}${memoryContext}${memoryInstructions}
-
-${TOOL_GUARDRAIL}
-${thinkingDirective}`;
-
   const modelToUse = specialModeConfig?.model || personaConfig.model;
-  let systemPromptToUse = enhancedSystemPrompt;
-  // PRO always gets the skills library tools
-  // Decided in code, not asked of the model: see api/_lib/tools.ts.
-  const imageAllowed = resolveImageAllowed(messages, !!imageData);
-  const searchAllowed = resolveWebSearchAllowed(messages);
-  const toolsToUse: ProviderTool[] = selectTools({
+  const deviceAppsEnabled = deviceApps ?? [];
+  // PRO always gets the skills library, and twice Air's token budget for tools.
+  // Flight Controls, same as /api/ai-proxy. PRO always has the built-in
+  // library; this adds whatever the user enabled on top.
+  const flightControls = await resolveFlightControlsCached(userId);
+  const userSkills: UserSkill[] = enabledSkills(flightControls.enabled).map(control => ({
+    slug: control.slug,
+    name: control.name,
+    description: control.description,
+    content: control.skill_content || '',
+  }));
+  // Slugs the catalog owns. A built-in skill the user switched off must not
+  // come back through SKILLS_DATA, or the toggle only works one way.
+  const governedSkillSlugs = flightControls.governedSkillSlugs;
+
+  const toolSet = selectToolSet({
     specialModeConfig,
     includeSkills: true,
-    imageAllowed,
-    searchAllowed,
+    messages,
+    hasAttachedImage: !!imageData,
+    hasAttachedPdf: !!(pdfData || pdfExtractedText),
+    deviceApps: deviceAppsEnabled,
+    deviceDataPresent,
+    deviceRoundsUsed: deviceRounds,
+    surface: 'pro',
   });
+  const toolsToUse: ProviderTool[] = toolSet.tools;
+  const offeredToolNames = toolsToUse.map(tool => tool.function.name);
+  const imageAllowed = offeredToolNames.includes('generate_image');
+  const searchAllowed = offeredToolNames.includes('web_search');
+
+  const enhancedSystemPrompt = `${systemPrompt}${memoryContext}${memoryInstructions}
+
+${buildToolGuardrail({ canFindTools: toolSet.canFindTools })}
+${thinkingDirective}`;
+  let systemPromptToUse = enhancedSystemPrompt;
+  const appToolsOffered = toolsToUse.some(tool => tool.function.name === 'healthcare_search'
+    || tool.function.name.startsWith('notes_') || tool.function.name.startsWith('chats_'));
+  const deviceToolsOffered = toolsToUse.some(tool =>
+    tool.function.name.startsWith('notes_') || tool.function.name.startsWith('chats_'));
+  // The client can run them and simply has none left, as opposed to never
+  // having declared it could run them at all. Only the first is worth saying.
+  const deviceRoundsSpent = deviceAppsEnabled.length > 0 && !deviceToolsOffered;
 
   const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
   const maxTokensToUse = specialModeConfig?.maxTokens ?? personaConfig.maxTokens;
@@ -179,6 +211,12 @@ ${thinkingDirective}`;
         systemPromptToUse = systemPromptToUse + ragContext;
       }
     }
+  }
+
+  // Only when the tools are actually in front of the model, and last so it is
+  // the most recently read instruction — same placement as /api/ai-proxy.
+  if (appToolsOffered) {
+    systemPromptToUse = systemPromptToUse + buildAppToolDirective({ toolNames: toolsToUse.map(tool => tool.function.name), deviceRoundsSpent });
   }
 
   // Build apiMessages (pro always uses a system prompt)
@@ -231,7 +269,16 @@ ${thinkingDirective}`;
 
   const attachments = collectAttachments(imageData, inputImageUrls);
   const hasImageInput = hasAttachments(attachments);
+  // The user's own last turn, captured before the device transcript is
+  // appended after it. Images belong to that message, not to whatever a
+  // resumed run happens to end with.
   const imageIndex = apiMessages.length - 1;
+
+  // Resuming a suspended run: the assistant turn that called the device tools,
+  // and their results, replayed so the model sees what it asked for.
+  if (toolTranscript && toolTranscript.length > 0) {
+    apiMessages.push(...(toolTranscript as ProviderMessage[]));
+  }
 
   // Images that travel with the job, for the task to attach or transcribe as
   // whichever hop serves the run requires. Empty means the route already
@@ -294,8 +341,21 @@ ${thinkingDirective}`;
     imageDimensions,
     hadImageInput: hasImageInput,
     ...(visionImages.length > 0 ? { visionImages, visionImageIndex: imageIndex } : {}),
+    // Kept alongside offeredTools so a Trigger task deployed before the
+    // catalogue landed still enforces both gates — the task ships separately
+    // from api/, so old and new payloads coexist for a window (CLAUDE.md #15).
     imageAllowed,
     searchAllowed,
+    offeredTools: offeredToolNames,
+    findableTools: toolSet.findable,
+    // The task runs on Trigger's infrastructure and cannot read Supabase for
+    // this user, so the resolved skills travel with the job.
+    userSkills,
+    governedSkillSlugs,
+    // The task suspends the run when the model reaches for a device tool; the
+    // client runs the calls and starts a fresh run with the transcript grown.
+    deviceBridge: deviceAppsEnabled.length > 0,
+    deviceRounds,
   };
 
   try {

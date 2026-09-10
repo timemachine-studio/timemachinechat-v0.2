@@ -1,4 +1,4 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './_lib/vercelTypes.js';
 import { createHash } from 'node:crypto';
 import { getAuthenticatedRequestUser } from './_lib/auth.js';
 import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
@@ -43,6 +43,14 @@ async function completeWithModel(state: ContinuationState, messages: Array<Recor
   } else if (provider === 'nvidia' || provider === 'nim') {
     url = 'https://integrate.api.nvidia.com/v1/chat/completions';
     apiKey = process.env.NVIDIA_API_KEY || process.env.NIM_API_KEY || '';
+    body = { model: state.model, messages, temperature: state.temperature, max_tokens: state.maxTokens, stream: false };
+  } else if (provider === 'amd') {
+    // Without this branch an approval on an AMD-served run falls through to
+    // the Pollinations default carrying AMD's model id, which just fails.
+    // This is the seventh copy of provider dispatch in the repo; they belong
+    // behind the adapter in ai-proxy.ts (production-check.md 3.5).
+    url = 'https://developer.amd.com.cn/radeon/api/v1/chat/completions';
+    apiKey = process.env.AMD_API_KEY || '';
     body = { model: state.model, messages, temperature: state.temperature, max_tokens: state.maxTokens, stream: false };
   } else {
     url = 'https://gen.pollinations.ai/v1/chat/completions';

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { VercelRequest, VercelResponse } from '@vercel/node';
+import type { VercelRequest, VercelResponse } from './vercelTypes.js';
 import { apiErrorBody } from './errors.js';
 
 /**
@@ -26,6 +26,11 @@ export const LIMITS = {
   maxImageDataBytes: 3 * 1024 * 1024,
   maxPdfChars: 400_000,
   maxPromptChars: 4_000,
+  // One device tool result, and the whole replayed transcript. Matches
+  // MAX_DEVICE_RESULT_CHARS in shared/deviceTools.ts, which is what the
+  // executors truncate to before sending.
+  maxDeviceResultChars: 12_000,
+  maxToolTranscript: 64,
 } as const;
 
 /**
@@ -33,8 +38,8 @@ export const LIMITS = {
  *
  * Vercel buffers and JSON-parses the body before the handler runs, so this is
  * a cost ceiling on what we then do with it, not a true streaming limit. The
- * dev middleware in vite.config.ts has no body limit at all — see
- * production-check.md item 3 in "Things that will bite you".
+ * dev middleware mirrors Vercel's separate 4.5 MB platform ceiling before it
+ * constructs this parsed request object.
  */
 export function bodyTooLarge(req: VercelRequest): boolean {
   const declared = Number(req.headers['content-length']);
@@ -91,6 +96,30 @@ export function isAllowedImageUrl(value: string): boolean {
   return allowedImageHosts().includes(url.host);
 }
 
+/**
+ * The assistant/tool turns a device round trip carries back into the next leg.
+ *
+ * This is client-supplied prompt content, same as `messages` — it grants no
+ * new authority, since the device tools ran under the user's own session on
+ * the user's own device. What it does need is a bound: it is replayed into
+ * the model verbatim, and a device tool result is the one part of the prompt
+ * the user never typed.
+ */
+const toolTranscriptMessageSchema = z.object({
+  role: z.enum(['assistant', 'tool']),
+  content: z.string().max(LIMITS.maxDeviceResultChars).nullable(),
+  tool_calls: z.array(z.object({
+    id: z.string().min(1).max(200),
+    type: z.string().max(32),
+    function: z.object({
+      name: z.string().min(1).max(64),
+      arguments: z.string().max(LIMITS.maxMessageChars),
+    }),
+  })).max(16).optional(),
+  tool_call_id: z.string().max(200).optional(),
+  name: z.string().max(64).optional(),
+}).strict();
+
 const messageSchema = z.object({
   content: z.string().max(LIMITS.maxMessageChars),
   isAI: z.boolean().optional(),
@@ -131,6 +160,15 @@ export const aiProxyBodySchema = z.object({
   pdfFileName: z.string().max(300).optional(),
   pdfExtractedText: z.string().max(LIMITS.maxPdfChars).optional(),
   chatSessionId: z.string().max(100).optional(),
+  // ─── Device tool bridge (shared/deviceTools.ts) ───────────────────────────
+  // Which device apps this client can execute for. Absent means none: an
+  // older cached bundle must not be offered tools it cannot run.
+  deviceApps: z.array(z.enum(['notes', 'chats'])).max(8).optional(),
+  // Of those, the ones that actually hold data. Readers are left out of a
+  // request with nothing to read; writers never are.
+  deviceDataPresent: z.array(z.enum(['notes', 'chats'])).max(8).optional(),
+  deviceRounds: z.number().int().min(0).max(16).default(0),
+  toolTranscript: z.array(toolTranscriptMessageSchema).max(LIMITS.maxToolTranscript).optional(),
 }).passthrough();
 
 export type AiProxyBody = z.infer<typeof aiProxyBodySchema>;
@@ -162,7 +200,7 @@ export const notesAiBodySchema = z.object({
  * The message names the offending fields but never echoes their values —
  * a rejected payload should not come back as a reflection of itself.
  */
-export function parseOrReject<T extends z.ZodTypeAny>(
+export function parseOrReject<T extends z.ZodType>(
   res: VercelResponse,
   schema: T,
   data: unknown,
