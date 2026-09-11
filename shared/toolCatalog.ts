@@ -64,7 +64,9 @@ export type SelectPredicate =
   | 'url_in_message'
   | 'recent_year'
   | 'image_attached'
-  | 'pdf_attached';
+  | 'pdf_attached'
+  | 'calculation_in_message'
+  | 'quantities_in_message';
 
 /** A tool that becomes relevant because of what the *previous* turn produced. */
 export interface SelectFollowUp {
@@ -190,12 +192,52 @@ const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"')]+/i;
  */
 const RECENT_YEAR = /\b20(?:2[4-9]|3\d)\b/;
 
+/**
+ * An arithmetic expression written out in the user's own message.
+ *
+ * The signal `run_python` runs on, and the reason it is a predicate rather
+ * than terms: "17 * 23" has no words in it. Deliberately narrow. `-` and `/`
+ * are left out of the symbol branch because they match date ranges, ratios
+ * and "3-4 days" far more often than they match a sum, and a spelled-out
+ * subtraction still matches through the word branch below.
+ */
+const CALCULATION_IN_TEXT = new RegExp([
+  // 17 * 23, 2^10, 6 × 7, 2 ** 8
+  String.raw`\d\s*(?:\*\*|[*^\u00d7\u00f7])\s*\d`,
+  // 17 times 23, 40 percent of, 12 divided by 4
+  String.raw`\b\d[\d,.]*\s*(?:times|multiplied\s+by|divided\s+by|plus|minus|squared|cubed|percent\s+of|%\s+of|to\s+the\s+power)\b`,
+  // sqrt(2), 5!
+  String.raw`\bsqrt\s*\(|\b\d+\s*!(?!\w)`,
+].join('|'), 'i');
+
+/**
+ * Two or more measured quantities in one message.
+ *
+ * The signal a word list cannot carry. "The one to the east is 1200 N and the
+ * one to the south is 2300 N. What is the resultant force?" is a physics
+ * problem with an exact answer, and it contains no arithmetic operator and
+ * none of run_python's terms — it was missed outright, and the model answered
+ * with hand arithmetic that got the angle wrong in the second decimal.
+ *
+ * Two, not one, because a single quantity is how people write ordinary
+ * sentences ("call me in 5 minutes"). Units are restricted to the unambiguous
+ * ones for the same reason: bare `s` would make "the 1980s and the 1990s" a
+ * physics question.
+ */
+const QUANTITY_IN_TEXT = /\b\d[\d,.]*\s?(?:N|kN|kg|mg|lbs?|km|cm|mm|nm|ft|mi|ms|m|°|deg(?:rees)?|rad|kJ|kW|Hz|Pa|atm|mol|m\/s|km\/h|mph|newtons?|joules?|watts?|volts?|amps?|met(?:re|er)s?|grams?|kilograms?|seconds?|minutes?|hours?|lit(?:re|er)s?)\b/gi;
+
 function predicateHolds(predicate: SelectPredicate, ctx: SelectionContext): boolean {
   switch (predicate) {
     case 'url_in_message': return URL_IN_TEXT.test(ctx.lastUserText);
     case 'recent_year': return RECENT_YEAR.test(ctx.lastUserText);
     case 'image_attached': return ctx.hasAttachedImage;
     case 'pdf_attached': return ctx.hasAttachedPdf;
+    case 'calculation_in_message': return CALCULATION_IN_TEXT.test(ctx.lastUserText);
+    case 'quantities_in_message':
+      // A global regex carries lastIndex between calls, so it is reset rather
+      // than trusted — otherwise every other turn would silently miss.
+      QUANTITY_IN_TEXT.lastIndex = 0;
+      return (ctx.lastUserText.match(QUANTITY_IN_TEXT) || []).length >= 2;
     default: return false;
   }
 }
@@ -270,14 +312,29 @@ export function estimateSchemaTokens(definition: ToolDefinition): number {
 }
 
 /**
- * What tools may cost, per surface.
+ * What *gated* tools may add to a request, per surface.
  *
- * Air's whole system prompt is about 1,200 tokens and its app tools measured
- * ~1,335 at their widest, so 1,600 leaves today's behaviour untouched while
- * capping what any future tool can add. PRO pays for a bigger model on longer
- * work; twice the room is cheap there and buys deeper tool use.
+ * Core is not charged against this, and that is the whole point. It used to
+ * be: one budget covered both, and the first version of this file set Air's
+ * to 1,600 because core measured ~1,335 at the time. Then two more core tools
+ * arrived — the skills pair, once a user enables a skill — core reached
+ * ~1,395, and `run_python` silently stopped being offered to anyone with a
+ * skill switched on. Found live: a turn that said "use Python" got a code
+ * block, because the tool was never in the request.
+ *
+ * That coupling is wrong in both directions. Core tools are capabilities the
+ * user has; they are offered regardless, so charging them against a budget
+ * they cannot lose only decides *which other tools disappear* — and it does it
+ * invisibly, as a side effect of adding something unrelated. The budget exists
+ * to stop speculative tools inflating every request, so it now governs exactly
+ * those.
+ *
+ * 700 fits the three or four gated tools that can plausibly fire on one turn
+ * (run_python 246, web_fetch 165, web_search 114) with room for a couple of
+ * MCP tools, which are the ones that could otherwise arrive by the dozen. PRO
+ * pays for a bigger model on longer work; twice the room is cheap there.
  */
-export const TOOL_TOKEN_BUDGET = { air: 1600, pro: 3200 } as const;
+export const TOOL_TOKEN_BUDGET = { air: 700, pro: 1400 } as const;
 export type ToolBudgetSurface = keyof typeof TOOL_TOKEN_BUDGET;
 
 export interface PackedTools {
@@ -333,13 +390,20 @@ export function packTools(
 
   const offered: ToolDescriptor[] = [];
   let tokensUsed = 0;
+  /** Only gated tools compete for the budget — see TOOL_TOKEN_BUDGET. */
+  let gatedTokens = 0;
   for (const entry of scored) {
-    // Core is a capability, not a guess: it is offered even if that overruns.
-    // Overrunning is still recorded, so the gated tools after it see no room.
-    const fits = tokensUsed + entry.cost <= budget;
-    if (entry.score === Number.POSITIVE_INFINITY || fits) {
+    if (entry.score === Number.POSITIVE_INFINITY) {
+      // Core is a capability, not a guess. It is always offered, and it does
+      // not take room away from anything else.
       offered.push(entry.descriptor);
       tokensUsed += entry.cost;
+      continue;
+    }
+    if (gatedTokens + entry.cost <= budget) {
+      offered.push(entry.descriptor);
+      tokensUsed += entry.cost;
+      gatedTokens += entry.cost;
     } else {
       findable.push(entry.descriptor);
     }

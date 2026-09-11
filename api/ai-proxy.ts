@@ -8,11 +8,14 @@ import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import { enabledMcpServers, enabledSkills, loadUserMcpServers, resolveFlightControlsCached } from './_lib/flightControls.js';
 import { discoverMcpToolsCached } from './_lib/mcpClient.js';
 import { mcpToolDescriptors } from './_lib/mcpCatalog.js';
+import { attachToolPayloads, loadPublishedToolsCached, recordToolUse, resolveRequestTools } from './_lib/toolRegistry.js';
 import { createMcpApprovalRequester } from './_lib/mcpApprovalRequest.js';
 import {
   buildToolGuardrail,
   THINKING_DIRECTIVE,
   buildAppToolDirective,
+  buildAttachedFilesDirective,
+  resolveDeviceRoundBudget,
   toApiMessages,
   selectToolSet,
   createToolPolicy,
@@ -30,7 +33,7 @@ import {
 } from './_lib/auth.js';
 import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
 import { apiErrorBody, sendApiError, CONTROL_FRAME_PREFIX, STATUS_FOR_CODE } from './_lib/errors.js';
-import { providerFetch, runWithProviderFallback, ProviderHttpError, type ProviderHop } from './_lib/providerResilience.js';
+import { guardStreamStart, providerFetch, recordProviderOutcome, runWithProviderFallback, ProviderHttpError, type ProviderHop } from './_lib/providerResilience.js';
 import {
   OCR_MODEL,
   chainIsAllNative,
@@ -97,27 +100,35 @@ export const AI_PERSONAS = {
     // hung for tens of seconds during testing, so they sit behind it — by the
     // time a turn reaches them, two providers are already down.
     fallbacks: [
-      { provider: 'nvidia', model: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning', vision: 'ocr' as const },
+      // OCR: the endpoint answers an image_url part with "multimodal
+      // processing is not enabled" (400). Tool calls stream fine, and its
+      // thinking switches off with the persona's reasoning_effort, which the
+      // nvidia block forwards. Both verified against the live endpoint; what
+      // was not fixable is its latency — nvidia's free endpoint queued even a
+      // four-token answer for 19–30s in testing.
+      { provider: 'nvidia', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', vision: 'ocr' as const },
       // OCR, not native: the endpoint answers an image_url part with a hard
       // 400, "Model DeepSeek-V4-Flash does not support image input." Verified
       // against the live API, per the rule above about unverified guesses.
       { provider: 'amd', model: 'DeepSeek-V4-Flash', vision: 'ocr' as const },
-      // `default` is LLM7's free-tier routing selector, not a model id.
-      //
-      // minimax-m2.7 was the requested model and is a one-line change back —
-      // but it is priced ($0.03/$0.05 per 1M) and this key has no balance, so
-      // it never answers: ten consecutive attempts timed out at 45s, while
-      // priced models that fail cleanly return `insufficient_balance`. A hop
-      // that cannot succeed is worse than no hop, because the chain still
-      // waits out the timeout before moving on. `default` was verified end to
-      // end through this dispatch path: a real tool call in 5.0s.
-      //
-      // The free tier allows 100 requests an hour, which is thin for a primary
-      // but fine here — this hop is only reached when three providers are down.
-      { provider: 'llm7', model: 'default', vision: 'ocr' as const },
+      // Last line, on purpose: Pollinations is paid and has been the most
+      // dependable host in this file, so it is reached only once three free
+      // providers are down. Text-only per its own model metadata
+      // (`input_modalities: ["text"]`), so `ocr`; tool calling is declared.
+      // It is also a reasoning model, which the pollinations block switches
+      // off and — because a strict upstream can 400 on the switches — retries
+      // without them rather than failing the hop.
+      { provider: 'pollinations', model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' as const },
     ],
     temperature: 0.8,
     maxTokens: 9304,
+    // Qwen 3.6 thinks unless told not to, and it thinks *into content*:
+    // measured against the live endpoint, "what is 17*23" cost 255 completion
+    // tokens and opened with "<think>Here's a thinking process" — against 4
+    // tokens and "391" with this set. On a tier that allows 1,000 output
+    // tokens a minute, that thinking was most of Air's budget. Only the groq
+    // block reads this; the other providers have their own switches.
+    reasoningEffort: 'none',
     flowState: {
       provider: 'groq',
       model: 'openai/gpt-oss-20b',
@@ -126,6 +137,10 @@ export const AI_PERSONAS = {
       vision: 'ocr' as const,
       temperature: 0.8,
       maxTokens: 9304,
+      // Its own setting, not Air's: gpt-oss rejects 'none' outright ("must be
+      // one of low, medium, or high" — a 400, verified), so inheriting the
+      // persona's value would fail every Flow State turn.
+      reasoningEffort: 'low',
       quotaCost: 4
     },
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
@@ -239,8 +254,26 @@ Some Information (no need to say these out loud to the users unless asked):
 1. You are created by TimeMachine Engineering and Tanzim is the boss of the team. He's a reaaly good and trusted guy and a Tony Stark level mindset. He is also known as Tanzim Infinity.
 You are one of the 3 resonators. The other two are "TimeMachine Air" and "TimeMachine PRO".`,
     initialMessage: "Hiee✨ I'm TimeMachine Girlie!",
-    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-    vision: 'native' as const,
+    // llama-4-scout is gone from groq — the endpoint returns 404
+    // model_not_found for it, and with no fallbacks declared every Girlie
+    // message died on its first hop. gpt-oss-120b is the owner's choice from
+    // what groq serves now.
+    provider: 'groq',
+    model: 'openai/gpt-oss-120b',
+    // OCR, not native: groq answers an image part on gpt-oss with 400
+    // "messages[0].content must be a string" (verified). Streaming tool
+    // calls work. It rejects reasoning_effort 'none' — low/medium/high only,
+    // also verified — so 'low' is as quiet as it goes, and its reasoning
+    // arrives in a separate field the groq block never forwards.
+    vision: 'ocr' as const,
+    reasoningEffort: 'low',
+    // The same chain Air runs, for the same reason: one provider's bad
+    // minute must not be a persona's outage. Every hop is text-only.
+    fallbacks: [
+      { provider: 'nvidia', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', vision: 'ocr' as const },
+      { provider: 'amd', model: 'DeepSeek-V4-Flash', vision: 'ocr' as const },
+      { provider: 'pollinations', model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' as const },
+    ],
     temperature: 0.9,
     maxTokens: 2500
   },
@@ -1655,7 +1688,8 @@ export async function callNvidiaAPIStreaming(
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
+  tools?: ProviderTool[],
+  reasoningEffort?: string
 ): Promise<ReadableStream> {
   if (!NVIDIA_API_KEY) {
     throw new Error('NVIDIA_API_KEY / NIM_API_KEY is not configured for Nvidia requests');
@@ -1678,6 +1712,14 @@ export async function callNvidiaAPIStreaming(
 
   if (maxTokens) {
     requestBody.max_tokens = maxTokens;
+  }
+
+  // Only when a persona asked for it. Verified on nemotron-3.5-lightning:
+  // 'none' turns its thinking off (4 completion tokens for "17*23" instead of
+  // a paragraph of reasoning). Not sent otherwise, because PRO's kimi-k3 has
+  // never been tested with it and an unknown field is a 400 on some gateways.
+  if (reasoningEffort) {
+    requestBody.reasoning_effort = reasoningEffort;
   }
 
   if (tools && tools.length > 0) {
@@ -1719,6 +1761,11 @@ export async function callNvidiaAPIStreaming(
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      // Shape of the answer, for the log: counts and the finish reason, never
+      // content. A reasoning model can spend its whole budget thinking and
+      // hand back nothing, and without this the log shows a request that
+      // succeeded and a user who saw "the model came back with nothing".
+      const seen = { content: 0, reasoning: 0, toolCalls: 0, finish: '' };
 
       try {
         while (true) {
@@ -1740,7 +1787,9 @@ export async function callNvidiaAPIStreaming(
 
                 if (data.choices && data.choices[0]) {
                   const choice = data.choices[0];
+                  if (choice.delta?.reasoning_content) seen.reasoning++;
                   if (choice.delta && choice.delta.content) {
+                    seen.content++;
                     controller.enqueue(new TextEncoder().encode(
                       JSON.stringify({
                         type: 'content',
@@ -1751,6 +1800,7 @@ export async function callNvidiaAPIStreaming(
 
                   // Handle tool calls
                   if (choice.delta && choice.delta.tool_calls) {
+                    seen.toolCalls++;
                     controller.enqueue(new TextEncoder().encode(
                       JSON.stringify({
                         type: 'tool_calls',
@@ -1760,6 +1810,7 @@ export async function callNvidiaAPIStreaming(
                   }
 
                   if (choice.finish_reason) {
+                    seen.finish = String(choice.finish_reason);
                     controller.enqueue(new TextEncoder().encode(
                       JSON.stringify({ type: 'finish', reason: choice.finish_reason }) + '\n'
                     ));
@@ -1773,6 +1824,9 @@ export async function callNvidiaAPIStreaming(
           }
         }
 
+        if (seen.content === 0 && seen.toolCalls === 0) {
+          console.warn(`[nvidia] empty answer: ${seen.reasoning} reasoning chunks, finish=${seen.finish || 'none'}`);
+        }
         controller.enqueue(new TextEncoder().encode(
           JSON.stringify({ type: 'finish' }) + '\n'
         ));
@@ -2248,20 +2302,34 @@ export async function callPollinationsAPIStreaming(
     toolCount: tools?.length || 0
   });
 
-  const response = await providerFetch(POLLINATIONS_API_URL, {
+  const post = (body: ProviderRequest) => providerFetch(POLLINATIONS_API_URL, {
     providerLabel: 'pollinations',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${POLLINATIONS_API_KEY}`
     },
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify(body)
   });
 
-  if (!response.ok) {
-
-    console.error('Pollinations API error:', response.status, response.status);
-    throw new Error(`Pollinations API error: ${response.status}`);
+  let response: Response;
+  try {
+    response = await post(requestBody);
+  } catch (error) {
+    // Pollinations is a gateway in front of many upstreams, and the three
+    // reasoning switches above are three different vendors' spellings — any
+    // upstream that validates its body strictly can answer one of them with
+    // a 400 (LLM7 did exactly that with `thinking_budget`). This is the last
+    // hop in Air's and Girlie's chains, so a refused switch must not be the
+    // reason a turn fails: send the request once more with none of them.
+    // The stream below never forwards a reasoning delta, and the client
+    // strips <think> from text, so a model that thinks anyway is verbose,
+    // not broken.
+    if (!(error instanceof ProviderHttpError) || error.status !== 400) throw error;
+    console.warn('[pollinations] 400 with reasoning switches; retrying without them');
+    const { thinking_budget: _tb, reasoning_effort: _re, thinking: _th, ...plain } = requestBody;
+    void _tb; void _re; void _th;
+    response = await post(plain as ProviderRequest);
   }
 
   if (!response.body) {
@@ -2293,6 +2361,10 @@ export async function callPollinationsAPIStreaming(
                 const jsonStr = trimmedLine.slice(6);
                 const data = JSON.parse(jsonStr);
 
+                // Only `content` and `tool_calls` are forwarded. A
+                // `reasoning_content` delta — what a thinking model emits
+                // when the switches above did not take — is dropped here on
+                // purpose, so it never reaches the user as text.
                 if (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) {
                   controller.enqueue(new TextEncoder().encode(
                     JSON.stringify({
@@ -2734,27 +2806,35 @@ export async function dispatchStreamingProvider(
 ): Promise<ReadableStream> {
   const { model, temperature, maxTokens, reasoningEffort } = cfg;
 
-  switch (provider) {
-    case 'groq':
-      return callGroqStandardAPIStreaming(messages, model, temperature as number, maxTokens as number, tools, reasoningEffort);
-    case 'pollinations':
-      return callPollinationsAPIStreaming(messages, model, temperature, maxTokens, tools);
-    case 'secretstoai':
-    case 'secrectstoai':
-      return callSecretsToAIAPIStreaming(messages, model, temperature, maxTokens, tools);
-    case 'eaon':
-      return callEaonAPIStreaming(messages, model, temperature, maxTokens, tools);
-    case 'nvidia':
-    case 'nim':
-      return callNvidiaAPIStreaming(messages, model, temperature, maxTokens, tools);
-    case 'amd':
-      return callAmdAPIStreaming(messages, model, temperature, maxTokens, tools);
-    case 'llm7':
-      return callLlm7APIStreaming(messages, model, temperature, maxTokens, tools);
-    case 'cerebras':
-    default:
-      return callCerebrasAirAPIStreaming(messages, tools, model, temperature, maxTokens);
-  }
+  // Every provider passes through guardStreamStart: a hop has not served the
+  // turn until it has produced text or a tool call. Without this, a provider
+  // that opened a 200 and sent nothing counted as success and the rest of the
+  // chain was never tried — the user saw "the model came back with nothing"
+  // while two providers sat idle.
+  const open = async (): Promise<ReadableStream> => {
+    switch (provider) {
+      case 'groq':
+        return callGroqStandardAPIStreaming(messages, model, temperature as number, maxTokens as number, tools, reasoningEffort);
+      case 'pollinations':
+        return callPollinationsAPIStreaming(messages, model, temperature, maxTokens, tools);
+      case 'secretstoai':
+      case 'secrectstoai':
+        return callSecretsToAIAPIStreaming(messages, model, temperature, maxTokens, tools);
+      case 'eaon':
+        return callEaonAPIStreaming(messages, model, temperature, maxTokens, tools);
+      case 'nvidia':
+      case 'nim':
+        return callNvidiaAPIStreaming(messages, model, temperature, maxTokens, tools, reasoningEffort);
+      case 'amd':
+        return callAmdAPIStreaming(messages, model, temperature, maxTokens, tools);
+      case 'llm7':
+        return callLlm7APIStreaming(messages, model, temperature, maxTokens, tools);
+      case 'cerebras':
+      default:
+        return callCerebrasAirAPIStreaming(messages, tools, model, temperature, maxTokens);
+    }
+  };
+  return guardStreamStart(await open(), provider);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -2813,7 +2893,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const body = parseOrReject(res, aiProxyBodySchema, req.body);
     if (!body) return;
 
-    const { messages, persona, imageData, heatLevel, stream, flowState, inputImageUrls, imageDimensions, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText, deviceApps, deviceDataPresent, deviceRounds, toolTranscript } = body;
+    const { messages, persona, imageData, heatLevel, stream, flowState, inputImageUrls, imageDimensions, userMemories, specialMode, pdfData, pdfFileName, pdfExtractedText, deviceApps, deviceDataPresent, deviceRounds, deviceFiles, toolTranscript, sessionTools } = body;
 
     const personaConfig = AI_PERSONAS[persona as keyof typeof AI_PERSONAS];
 
@@ -2950,6 +3030,15 @@ The memory tags will be processed and removed from the visible response, so writ
       : [];
     const mcpDescriptors = mcpToolDescriptors(mcpTools);
 
+    // Tools TimeMachine wrote: this conversation's own, then the shared
+    // registry. They run in the browser's sandbox, so a client that cannot
+    // run Python is not offered them — the descriptors say so and the packer
+    // enforces it — and the registry is not even read for one.
+    const generatedTools = resolveRequestTools(
+      sessionTools,
+      deviceAppsEnabled.includes('python') ? await loadPublishedToolsCached() : [],
+    );
+
     const toolSet = selectToolSet({
       specialModeConfig,
       // PRO always has the library. Everyone else gets the skills tools only
@@ -2963,7 +3052,7 @@ The memory tags will be processed and removed from the visible response, so writ
       deviceDataPresent,
       deviceRoundsUsed: deviceRounds,
       surface: persona === 'pro' ? 'pro' : 'air',
-      extraDescriptors: mcpDescriptors,
+      extraDescriptors: [...mcpDescriptors, ...generatedTools.descriptors],
     });
     const toolsToUse: ProviderTool[] = toolSet.tools;
     const offeredToolNames = toolsToUse.map(tool => tool.function.name);
@@ -2973,17 +3062,19 @@ The memory tags will be processed and removed from the visible response, so writ
 
     const enhancedSystemPrompt = `${systemPrompt}${memoryContext}${memoryInstructions}
 
-${buildToolGuardrail({ canFindTools: toolSet.canFindTools })}
+${buildToolGuardrail({ canFindTools: toolSet.canFindTools, canRunPython: toolSet.offered.some(descriptor => descriptor.name === 'run_python') })}
 ${thinkingDirective}`;
     let systemPromptToUse = enhancedSystemPrompt;
 
     const appToolsOffered = toolsToUse.some(tool => tool.function.name === 'healthcare_search'
       || tool.function.name.startsWith('notes_') || tool.function.name.startsWith('chats_'));
-    const deviceToolsOffered = toolsToUse.some(tool =>
-      tool.function.name.startsWith('notes_') || tool.function.name.startsWith('chats_'));
     // The client can run them and simply has none left, as opposed to never
     // having declared it could run them at all. Only the first is worth saying.
-    const deviceRoundsSpent = deviceAppsEnabled.length > 0 && !deviceToolsOffered;
+    // Read from the budget rather than inferred from the tool list: run_python
+    // is gated, so "no device tool was offered" is also true of a turn that
+    // simply did not want one, and that turn has spent nothing.
+    const deviceRoundsSpent = deviceAppsEnabled.length > 0
+      && (deviceRounds ?? 0) >= resolveDeviceRoundBudget();
 
     // Apply temperature, maxTokens, and reasoningEffort overrides from special mode
     const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
@@ -3007,7 +3098,14 @@ ${thinkingDirective}`;
     // Only when the tools are actually in front of the model — a special mode
     // that opted out of tools must not be told it can reach the user's apps.
     if (appToolsOffered) {
-      systemPromptToUse = systemPromptToUse + buildAppToolDirective({ toolNames: toolsToUse.map(tool => tool.function.name), deviceRoundsSpent });
+      systemPromptToUse = systemPromptToUse + buildAppToolDirective({ toolNames: toolsToUse.map(tool => tool.function.name), deviceRoundsSpent, deviceApps: deviceAppsEnabled });
+    }
+
+    // Only alongside the tool that can open them. Naming files the model has
+    // no way to read is the same mistake as promising an app tool it was not
+    // given — it contradicts the policy directly above.
+    if (deviceFiles && deviceFiles.length > 0 && offeredToolNames.includes('run_python')) {
+      systemPromptToUse = systemPromptToUse + buildAttachedFilesDirective(deviceFiles);
     }
 
     // PDF handling: text extraction is done on the frontend (pdfjs-dist).
@@ -3088,17 +3186,21 @@ ${thinkingDirective}`;
       let runModel: string = modelToUse;
       let runTemperature: number | undefined = temperatureToUse;
       let runMaxTokens: number | undefined = maxTokensToUse;
+      let runReasoningEffort: string | undefined = reasoningEffortToUse;
       const runTools = toolsToUse;
 
       // Flow State swaps the model alongside the provider.
       const flowConfig = (personaConfig as PersonaProviderConfig & {
-        flowState?: VisionCapability & { model?: string; temperature?: number; maxTokens?: number };
+        flowState?: VisionCapability & { model?: string; temperature?: number; maxTokens?: number; reasoningEffort?: string };
       }).flowState;
       const usingFlowState = persona === 'default' && flowState && !!flowConfig;
       if (usingFlowState && flowConfig) {
         runModel = flowConfig.model ?? runModel;
         runTemperature = flowConfig.temperature;
         runMaxTokens = flowConfig.maxTokens;
+        // Replaced, not defaulted: the persona's value describes the persona's
+        // model, and this one may not accept it — see the config.
+        runReasoningEffort = flowConfig.reasoningEffort;
       }
 
       // The vision annotation has to come from whichever config supplied
@@ -3119,10 +3221,12 @@ ${thinkingDirective}`;
         // model recover on the next iteration.
         const toolPolicy = createToolPolicy({ offered: offeredToolNames });
 
-        // Opening a provider stream is the only retryable moment: it either
-        // yields a stream or throws before a single byte reaches the client.
-        // Once tokens are flowing there is no resume, so a mid-stream death
-        // surfaces as truncated instead (1.9/1.11).
+        // Opening a provider stream — up to and including its first real
+        // frame, see guardStreamStart — is the only retryable moment: it
+        // either yields a stream that has started answering or throws before
+        // a single byte reaches the client. Once tokens are flowing there is
+        // no resume, so a mid-stream death surfaces as truncated instead
+        // (1.9/1.11).
         const fullChain = buildProviderChain(runProvider, runModel, personaFallbacks(personaConfig), primaryCapability);
         // Drop hops whose provider is out of budget for the day. With no ceiling
         // configured openProviders holds the whole chain, so nothing is lost.
@@ -3190,7 +3294,7 @@ ${thinkingDirective}`;
                 model: modelToUse,
                 temperature: temperatureToUse,
                 maxTokens: maxTokensToUse,
-                reasoningEffort: reasoningEffortToUse,
+                reasoningEffort: runReasoningEffort,
               })
             : undefined,
           emit: {
@@ -3198,9 +3302,22 @@ ${thinkingDirective}`;
             emitToolText: (text) => { hasStreamedContent = true; res.write(`\n\n${text}\n\n`); },
             emitMarker: (marker) => { res.write(marker); },
           },
-          callModel: async (msgs, activeTools) => {
+          callModel: async (msgs, activeTools, attempt) => {
+            // A hop that opened and answered with nothing is not one the chain
+            // knows how to fail. Seen live: nvidia returned an empty 200 and
+            // AMD and LLM7 were never tried. On the loop's one retry, that hop
+            // is skipped and charged a failure so its breaker learns too.
+            let chain = providerChain;
+            if (attempt.afterEmptyAnswer) {
+              recordProviderOutcome(servedProvider, false);
+              const rest = providerChain.filter(hop => hop.provider !== servedProvider);
+              if (rest.length > 0) {
+                console.warn(`[${persona}] ${servedProvider} answered with nothing; retrying on ${rest[0].provider}`);
+                chain = rest;
+              }
+            }
             const walkChain = (forceOcr: boolean) => runWithProviderFallback(
-              providerChain,
+              chain,
               async (hop) => dispatchStreamingProvider(
                 hop.provider,
                 await adaptForHop(hop as VisionHop, msgs, { forceOcr }),
@@ -3209,7 +3326,7 @@ ${thinkingDirective}`;
                   model: hop.model,
                   temperature: runTemperature,
                   maxTokens: runMaxTokens,
-                  reasoningEffort: reasoningEffortToUse,
+                  reasoningEffort: runReasoningEffort,
                 }
               ),
               (message) => console.log(`[${persona}] ${message}`),
@@ -3225,7 +3342,7 @@ ${thinkingDirective}`;
               // walking it once more turns that into a worse answer instead of
               // no answer. Safe to retry — opening a stream either yields one
               // or throws, so nothing has reached the client yet.
-              if (!hasImageInput || !chainIsAllNative(providerChain as VisionHop[])) throw error;
+              if (!hasImageInput || !chainIsAllNative(chain as VisionHop[])) throw error;
               console.warn(`[${persona}] every hop failed with images attached; retrying the chain with transcription`);
               run = await walkChain(true);
             }
@@ -3257,15 +3374,22 @@ ${thinkingDirective}`;
         }
 
         if (loopResult.deviceSuspension) {
+          // A registry tool's code travels with the call — the browser has
+          // never seen it. A session tool's does not; the browser wrote it.
+          const toolCalls = attachToolPayloads(
+            loopResult.deviceSuspension.allToolCalls.map(call => ({
+              id: call.id,
+              name: call.function.name,
+              arguments: call.function.arguments || '{}',
+            })),
+            generatedTools.registryByName,
+          );
+          recordToolUse(toolCalls);
           const frame: DeviceToolRequestFrame = {
             type: 'device_tool_request',
             payload: {
               assistantContent: loopResult.deviceSuspension.assistantContent,
-              toolCalls: loopResult.deviceSuspension.allToolCalls.map(call => ({
-                id: call.id,
-                name: call.function.name,
-                arguments: call.function.arguments || '{}',
-              })),
+              toolCalls,
               resolvedResults: loopResult.deviceSuspension.resolvedResults,
               deviceRounds: deviceRounds + 1,
             },
@@ -3366,8 +3490,8 @@ ${thinkingDirective}`;
               max_tokens: flowConfig.maxTokens,
               stream: false
             };
-            if (reasoningEffortToUse) {
-              requestBody.reasoning_effort = reasoningEffortToUse;
+            if (flowConfig.reasoningEffort) {
+              requestBody.reasoning_effort = flowConfig.reasoningEffort;
             }
             if (toolsToUse && toolsToUse.length > 0) {
               requestBody.tools = toolsToUse;
@@ -3439,7 +3563,7 @@ ${thinkingDirective}`;
               max_completion_tokens: flowConfig.maxTokens,
               top_p: 1,
               stream: false,
-              reasoning_effort: reasoningEffortToUse
+              reasoning_effort: flowConfig.reasoningEffort
             };
             if (toolsToUse && toolsToUse.length > 0) {
               requestBody.tools = toolsToUse;

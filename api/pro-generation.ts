@@ -13,7 +13,9 @@ import {
   personaFallbacks,
   runProviderNames,
 } from './ai-proxy.js';
-import { buildToolGuardrail, THINKING_DIRECTIVE, buildAppToolDirective, selectToolSet, toApiMessages, type UserSkill } from './_lib/tools.js';
+import { loadPublishedToolsCached, resolveRequestTools } from './_lib/toolRegistry.js';
+import { registryToolPayload } from '../shared/toolRegistry.js';
+import { buildToolGuardrail, THINKING_DIRECTIVE, buildAppToolDirective, buildAttachedFilesDirective, resolveDeviceRoundBudget, selectToolSet, toApiMessages, type UserSkill } from './_lib/tools.js';
 import { enabledSkills, resolveFlightControlsCached } from './_lib/flightControls.js';
 import { SPECIAL_MODE_CONFIGS } from './_lib/specialModePrompts.js';
 import {
@@ -83,7 +85,9 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     deviceApps,
     deviceDataPresent,
     deviceRounds,
+    deviceFiles,
     toolTranscript,
+    sessionTools,
   } = body;
 
   // Identify the user from the Supabase access token (falls back to anonymous)
@@ -167,6 +171,14 @@ The memory tags will be processed and removed from the visible response, so writ
   // come back through SKILLS_DATA, or the toggle only works one way.
   const governedSkillSlugs = flightControls.governedSkillSlugs;
 
+  // Generated tools, exactly as /api/ai-proxy resolves them. The task cannot
+  // read the registry for itself, so the code of any registry tool the model
+  // might call travels with the job.
+  const generatedTools = resolveRequestTools(
+    sessionTools,
+    deviceAppsEnabled.includes('python') ? await loadPublishedToolsCached() : [],
+  );
+
   const toolSet = selectToolSet({
     specialModeConfig,
     includeSkills: true,
@@ -177,6 +189,7 @@ The memory tags will be processed and removed from the visible response, so writ
     deviceDataPresent,
     deviceRoundsUsed: deviceRounds,
     surface: 'pro',
+    extraDescriptors: generatedTools.descriptors,
   });
   const toolsToUse: ProviderTool[] = toolSet.tools;
   const offeredToolNames = toolsToUse.map(tool => tool.function.name);
@@ -185,16 +198,18 @@ The memory tags will be processed and removed from the visible response, so writ
 
   const enhancedSystemPrompt = `${systemPrompt}${memoryContext}${memoryInstructions}
 
-${buildToolGuardrail({ canFindTools: toolSet.canFindTools })}
+${buildToolGuardrail({ canFindTools: toolSet.canFindTools, canRunPython: toolSet.offered.some(descriptor => descriptor.name === 'run_python') })}
 ${thinkingDirective}`;
   let systemPromptToUse = enhancedSystemPrompt;
   const appToolsOffered = toolsToUse.some(tool => tool.function.name === 'healthcare_search'
     || tool.function.name.startsWith('notes_') || tool.function.name.startsWith('chats_'));
-  const deviceToolsOffered = toolsToUse.some(tool =>
-    tool.function.name.startsWith('notes_') || tool.function.name.startsWith('chats_'));
   // The client can run them and simply has none left, as opposed to never
   // having declared it could run them at all. Only the first is worth saying.
-  const deviceRoundsSpent = deviceAppsEnabled.length > 0 && !deviceToolsOffered;
+  // Read from the budget rather than inferred from the tool list: run_python
+  // is gated, so "no device tool was offered" is also true of a turn that
+  // simply did not want one, and that turn has spent nothing.
+  const deviceRoundsSpent = deviceAppsEnabled.length > 0
+    && (deviceRounds ?? 0) >= resolveDeviceRoundBudget();
 
   const temperatureToUse = specialModeConfig?.temperature ?? personaConfig.temperature;
   const maxTokensToUse = specialModeConfig?.maxTokens ?? personaConfig.maxTokens;
@@ -216,7 +231,14 @@ ${thinkingDirective}`;
   // Only when the tools are actually in front of the model, and last so it is
   // the most recently read instruction — same placement as /api/ai-proxy.
   if (appToolsOffered) {
-    systemPromptToUse = systemPromptToUse + buildAppToolDirective({ toolNames: toolsToUse.map(tool => tool.function.name), deviceRoundsSpent });
+    systemPromptToUse = systemPromptToUse + buildAppToolDirective({ toolNames: toolsToUse.map(tool => tool.function.name), deviceRoundsSpent, deviceApps: deviceAppsEnabled });
+  }
+
+  // Only alongside the tool that can open them. Naming files the model has
+  // no way to read is the same mistake as promising an app tool it was not
+  // given — it contradicts the policy directly above.
+  if (deviceFiles && deviceFiles.length > 0 && offeredToolNames.includes('run_python')) {
+    systemPromptToUse = systemPromptToUse + buildAttachedFilesDirective(deviceFiles);
   }
 
   // Build apiMessages (pro always uses a system prompt)
@@ -356,6 +378,13 @@ ${thinkingDirective}`;
     // client runs the calls and starts a fresh run with the transcript grown.
     deviceBridge: deviceAppsEnabled.length > 0,
     deviceRounds,
+    // Only the registry tools the request could actually offer, keyed by
+    // model-facing name, so the task can put the code on a suspended call.
+    registryTools: Object.fromEntries(
+      [...generatedTools.registryByName]
+        .filter(([name]) => offeredToolNames.includes(name) || toolSet.findable.some(d => d.name === name))
+        .map(([name, tool]) => [name, registryToolPayload(tool)]),
+    ),
   };
 
   try {

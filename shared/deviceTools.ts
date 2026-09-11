@@ -12,10 +12,21 @@
  * rest of the server tools. The split is about where the data is, not about
  * which product surface the tool belongs to.
  *
+ * `run_python` joins them for a different reason: its data is wherever the
+ * user put it, but its *sandbox* is here. The bridge does not care why a tool
+ * has to run on the device, only that it does.
+ *
  * Both api/ and src/ import this file, so it must stay dependency-free.
  */
 
-import { capabilitiesMet, type ToolDescriptor } from './toolCatalog';
+import { capabilitiesMet, type ToolDescriptor } from './toolCatalog.js';
+import {
+  CREATE_TOOL_NAME,
+  createToolDescriptor,
+  isRegistryToolName,
+  type RegistryToolName,
+  type RegistryToolPayload,
+} from './toolRegistry.js';
 
 /** A tool the browser executes. Anything not in here runs on the server. */
 export const DEVICE_TOOL_NAMES = [
@@ -25,14 +36,23 @@ export const DEVICE_TOOL_NAMES = [
   'notes_edit',
   'chats_search',
   'chats_read',
+  'run_python',
+  CREATE_TOOL_NAME,
 ] as const;
 
 export type DeviceToolName = (typeof DEVICE_TOOL_NAMES)[number];
 
 const DEVICE_TOOL_NAME_SET: ReadonlySet<string> = new Set(DEVICE_TOOL_NAMES);
 
-export function isDeviceToolName(name: string | undefined | null): name is DeviceToolName {
-  return !!name && DEVICE_TOOL_NAME_SET.has(name);
+/**
+ * Whether the browser is what runs this tool.
+ *
+ * The fixed list, plus every `tm__` name: a generated tool is Python, and the
+ * sandbox is here. The prefix is the whole test — a registry can grow without
+ * this function learning a single new name.
+ */
+export function isDeviceToolName(name: string | undefined | null): name is DeviceToolName | RegistryToolName {
+  return !!name && (DEVICE_TOOL_NAME_SET.has(name) || isRegistryToolName(name));
 }
 
 /**
@@ -72,6 +92,14 @@ export interface DeviceToolCall {
   name: string;
   /** Raw JSON string, exactly as the model emitted it. Parsed on the device. */
   arguments: string;
+  /**
+   * The code, for a tool that came from the shared registry.
+   *
+   * Present only when the server loaded the tool from a registry row; a tool
+   * this conversation created is already on the device and carries nothing.
+   * The browser checks the digest before it runs anything from here.
+   */
+  tool?: RegistryToolPayload;
 }
 
 export interface DeviceToolRequestFrame {
@@ -225,9 +253,103 @@ export const chatsReadTool = {
   },
 };
 
+// ─── Code execution ─────────────────────────────────────────────────────────
+//
+// Python runs on the device for the same reason Notes does: not because the
+// data is here, but because the *sandbox* is. A browser tab is already the
+// strongest isolation boundary this product owns — no filesystem, no network
+// credentials, no other users — and it is per-user by construction, so a
+// runaway loop costs one person one tab rather than a shared worker.
+//
+// One tool, not three. The brief asked for reliable arithmetic, data analysis
+// and user-visible output, and those are one runtime differing only in where
+// the output goes. Splitting them would have put three schemas on every
+// request that wants any of them and given the model a classification problem
+// it has no reason to get right. What the user sees is decided by the code
+// instead: `show()` and files in /outputs are the deliverable, stdout is the
+// model's own working. Nothing here asks the user to approve anything —
+// showing a table is not an action that needs consent.
+
+export const runPythonTool = {
+  type: 'function' as const,
+  function: {
+    name: 'run_python',
+    strict: true,
+    description: "Run Python and get its real output. Use it whenever an exact answer matters — arithmetic, physics, dates, counting, parsing, statistics — rather than working it out in your head, and to analyse data the user gave you. numpy, pandas and matplotlib are available, plus python-docx, openpyxl, fpdf2 and pypdf for making and reading Word, Excel and PDF files; imports install themselves. Variables persist between calls. print() what you need to read back; anything passed to show() — a chart, a DataFrame, a string — is displayed to the user, and files written to /outputs become their downloads. Asked to see, draw or visualise something, plot it and show() it: printed numbers are not a drawing.",
+    parameters: {
+      type: 'object',
+      properties: {
+        code: {
+          type: 'string',
+          description: 'Complete, self-contained Python. Imports included.',
+        },
+      },
+      required: ['code'],
+      additionalProperties: false,
+    },
+  },
+};
+
+/**
+ * Turns that want code run rather than written.
+ *
+ * Unused while `run_python` is `core`, and kept deliberately: it is the whole
+ * gate, ready to go back if the always-on cost stops being worth it. Two live
+ * rounds of widening it are why the tool is core now — a keyword list could be
+ * made to catch "1200 N … 2300 N" and "make me a PDF invoice", but only after
+ * each one had already failed in front of a user, and there was always another
+ * phrasing behind it.
+ *
+ * There is deliberately no veto. BUILD_TERMS, which vetoes generate_image,
+ * contains 'python', 'chart', 'graph', 'table' and 'code' — the exact words
+ * that should *enable* this tool.
+ */
+export const PYTHON_TERMS = [
+  // Arithmetic and exact answers
+  'calculate', 'calculation', 'compute', 'work out', 'how much is',
+  'sum of', 'total of', 'add up', 'average of', 'the mean', 'median',
+  'standard deviation', 'variance', 'percentage', 'percent of', 'ratio of',
+  'round to', 'decimal places', 'significant figures', 'square root',
+  'factorial', 'prime number', 'primes', 'fibonacci', 'compound interest',
+  'interest rate', 'amortization', 'amortisation', 'probability of',
+  // Dates
+  'days between', 'weeks between', 'months between', 'years between',
+  'how many days', 'day of the week', 'business days', 'leap year',
+  // Data
+  'this data', 'the data', 'dataset', 'data set', 'csv', 'tsv',
+  'spreadsheet', 'dataframe', 'data frame', 'pandas', 'numpy', 'scipy',
+  'matplotlib', 'sympy', 'statistics', 'regression', 'correlation',
+  'outlier', 'outliers', 'group by', 'pivot', 'aggregate', 'distribution',
+  'frequency of', 'word count', 'count how many', 'sort these', 'parse this',
+  'deduplicate',
+  // Charts
+  'plot a', 'plot the', 'plot this', 'plotting', 'chart', 'histogram',
+  'scatter plot', 'bar graph', 'line graph', 'pie chart', 'box plot',
+  'heatmap', 'graph of', 'graph this', 'visualise', 'visualize',
+  'visualisation', 'visualization',
+  // Maths, physics and anything with one right answer. Added after a live
+  // miss: a resultant-force question carried no operator and none of the words
+  // above, so the tool was never offered and the model answered by hand.
+  'solve', 'solve for', 'equation', 'formula', 'work it out', 'evaluate',
+  'resultant', 'vector', 'magnitude', 'newton', 'newtons', 'force', 'forces',
+  'velocity', 'acceleration', 'momentum', 'kinetic', 'trajectory', 'friction',
+  'angle', 'degrees', 'radians', 'hypotenuse', 'triangle', 'pythagoras',
+  'sine', 'cosine', 'tangent', 'trig', 'quadratic', 'roots of', 'logarithm',
+  'derivative', 'integral', 'matrix', 'determinant', 'diagram',
+  // Documents. run_python is what makes these, so the words that mean "make me
+  // a file" have to reach it — there is no separate PDF or Word tool.
+  'pdf', 'word document', 'docx', 'excel', 'xlsx', 'spreadsheet file',
+  'worksheet', 'workbook', 'invoice', 'report', 'certificate', 'letter',
+  'export to', 'save as a file', 'make a file', 'downloadable', 'download',
+  // Explicit
+  'run python', 'use python', 'python script', 'run this code',
+  'run the code', 'execute this', 'execute python', 'simulate',
+  'simulation', 'monte carlo', 'brute force',
+];
+
 export const NOTES_TOOLS = [notesSearchTool, notesReadTool, notesCreateTool, notesEditTool];
 export const CHAT_HISTORY_TOOLS = [chatsSearchTool, chatsReadTool];
-export const DEVICE_TOOLS = [...NOTES_TOOLS, ...CHAT_HISTORY_TOOLS];
+export const DEVICE_TOOLS = [...NOTES_TOOLS, ...CHAT_HISTORY_TOOLS, runPythonTool, createToolDescriptor.definition];
 
 /**
  * Which device apps a client says it can execute for.
@@ -236,8 +358,17 @@ export const DEVICE_TOOLS = [...NOTES_TOOLS, ...CHAT_HISTORY_TOOLS];
  * an older cached bundle that does not know these tools would otherwise be
  * offered them and strand every run at the first call.
  */
-export const DEVICE_APPS = ['notes', 'chats'] as const;
+export const DEVICE_APPS = ['notes', 'chats', 'python'] as const;
 export type DeviceApp = (typeof DEVICE_APPS)[number];
+
+/**
+ * The apps whose tools are worth withholding when the store is empty.
+ *
+ * `python` is a capability, not a store: there is nothing in it to be empty,
+ * and a client that can run it can always run it. Keeping the distinction
+ * explicit is what stops a meaningless `python:data` capability existing.
+ */
+export const DATA_BACKED_APPS: readonly DeviceApp[] = ['notes', 'chats'];
 
 /**
  * The tools to offer, given what this client can run and what it actually has.
@@ -286,7 +417,7 @@ export function deviceCapabilities(
   for (const app of DEVICE_APPS) {
     if (!apps.includes(app)) continue;
     capabilities.push(app);
-    if (hasData.includes(app)) capabilities.push(`${app}:data`);
+    if (DATA_BACKED_APPS.includes(app) && hasData.includes(app)) capabilities.push(`${app}:data`);
   }
   return capabilities;
 }
@@ -347,4 +478,37 @@ export const DEVICE_TOOL_DESCRIPTORS: ToolDescriptor[] = [
     summary: 'Read the messages of one earlier conversation.',
     origin: 'builtin',
   },
+  {
+    name: 'run_python',
+    definition: runPythonTool,
+    runtime: 'device',
+    // Core, after two rounds of the gate being wrong in front of a user: a
+    // resultant-force question answered by hand with the angle off in the
+    // second decimal, and "use python to show it" that printed instead of
+    // drawing. Both were gate misses, and each fix only closed the phrasing
+    // that had already failed.
+    //
+    // Core is the right tier on its own terms, too. It means "a capability the
+    // user has, not a guess about what they meant", and a code sandbox is
+    // exactly that — the same argument that makes their own notes core. The
+    // failure the gating mechanism was built for is an unwanted *picture*;
+    // Python that is offered and not needed simply is not called.
+    //
+    // It costs ~290 tokens on every Air message. `select` below is the gate it
+    // would go back to: change this one word and the terms take over again.
+    tier: 'core',
+    requires: ['python'],
+    summary: 'Run Python for exact results, data analysis, charts, tables, and PDF, Word or Excel files the user can download.',
+    origin: 'builtin',
+    select: {
+      intent: PYTHON_TERMS,
+      // Neither "17 * 23" nor "1200 N … 2300 N" contains a word a term list
+      // could match, and between them they are most of what this tool is for.
+      predicates: ['calculation_in_message', 'quantities_in_message'],
+    },
+  },
+  // Writing a tool needs the sandbox to test it in, so it is a device tool
+  // for the same reason run_python is. Its descriptor lives with the rest of
+  // the registry contract in toolRegistry.ts.
+  createToolDescriptor,
 ];

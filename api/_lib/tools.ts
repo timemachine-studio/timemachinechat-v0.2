@@ -29,6 +29,7 @@ import {
   type ToolBudgetSurface,
   type ToolDescriptor,
 } from '../../shared/toolCatalog.js';
+import { CREATE_TOOL_NAME } from '../../shared/toolRegistry.js';
 import { fetchWebPage, formatPageForModel } from './webFetch.js';
 import { executeMcpTool, type DiscoveredMcpTool } from './mcpClient.js';
 import { isMcpToolName } from './mcpCatalog.js';
@@ -88,14 +89,39 @@ export const TOOL_GUARDRAIL = `
  * policy block. So the rule is rewritten when find_tools is present rather
  * than sitting next to its own exception.
  */
-export function buildToolGuardrail(opts: { canFindTools: boolean }): string {
-  if (!opts.canFindTools) return TOOL_GUARDRAIL;
+export function buildToolGuardrail(opts: { canFindTools: boolean; canRunPython?: boolean }): string {
+  const rules: string[] = [];
+
+  // Rule 1 is where the whole policy leans, and run_python is the one tool it
+  // leans the wrong way about. "Prefer your own reasoning" is right for a web
+  // search and wrong for arithmetic: a model's own reasoning is exactly what
+  // is unreliable there, which is why the tool exists. Found live — a turn
+  // offered run_python for "4177 * 39281 … plot y = x**2", and the model did
+  // the multiplication in its head and *offered* to draw the chart later.
+  rules.push(opts.canRunPython
+    ? 'Prefer your own knowledge and reasoning over tools, with one exception: exact numbers. Arithmetic, dates, counting and statistics are what run_python is for — run it instead of working them out in your head, and answer from what it returns.'
+    : 'Prefer your own knowledge and reasoning over tools. Reach for a tool only when the user needs something you cannot produce yourself.');
+
+  // Rule 2 is the other half of the same conflict. "Write the code directly in
+  // a code block" is right for a website and wrong for a chart: it was written
+  // when there was nothing that could draw one, and left alone it turns "draw
+  // me a line chart" into an HTML file the user has to save and open. Found
+  // live, twice. So the carve-out goes inside the rule rather than in a rule
+  // after it, where it was losing.
+  rules.push(opts.canRunPython
+    ? 'When the user asks for a website, app, game, or any other code, write the code directly in a fenced code block. A chart, a diagram, a drawing, a table or a generated file is not a code request: make it with run_python so they get the thing itself, rather than code they would have to run. "Draw it", "sketch it", "show me" and "visualise it" all mean plot it and show it — never say you cannot draw, and never offer to produce one instead of producing it.'
+    : 'When the user asks for a website, app, game, or any other code, write the code directly in a fenced code block.');
+
+  if (opts.canFindTools) {
+    rules.push('You can only call tools that are listed in this request. TimeMachine has more tools than fit in one request, so if you need a capability that is not listed, call find_tools to load it — then call the tool it gives you. Never assume an unlisted tool exists, and never tell the user you have done something a tool would have had to do.');
+    rules.push('Never say you cannot do something until you have called find_tools and seen that there is no tool for it. "I can\'t read live web pages" is wrong if find_tools would have handed you one.');
+  } else {
+    rules.push('The tools listed in this request are the only ones available to you. If a tool is not listed, it does not exist for this turn.');
+  }
+
   return `
 ## Tool Usage Policy
-1. Prefer your own knowledge and reasoning over tools. Reach for a tool only when the user needs something you cannot produce yourself.
-2. When the user asks for a website, app, game, or any other code, write the code directly in a fenced code block.
-3. You can only call tools that are listed in this request. TimeMachine has more tools than fit in one request, so if you need a capability that is not listed, call find_tools to load it — then call the tool it gives you. Never assume an unlisted tool exists, and never tell the user you have done something a tool would have had to do.
-4. Never say you cannot do something until you have called find_tools and seen that there is no tool for it. "I can't read live web pages" is wrong if find_tools would have handed you one.
+${rules.map((rule, index) => `${index + 1}. ${rule}`).join('\n')}
 `;
 }
 
@@ -245,14 +271,27 @@ export function buildAppToolDirective(opts: {
   toolNames: readonly string[];
   /** The client can run device tools, but this turn has spent its rounds. */
   deviceRoundsSpent: boolean;
+  /**
+   * What the client declared it can execute. Only used to name the right
+   * things in the spent message — telling someone whose bundle cannot run
+   * Python that they have used up their Python runs is worse than saying
+   * nothing.
+   */
+  deviceApps?: readonly string[];
 }): string {
   const has = (name: string) => opts.toolNames.includes(name);
   const readers = ['notes_search', 'notes_read', 'chats_search', 'chats_read'].filter(has);
 
   if (opts.deviceRoundsSpent && readers.length === 0) {
+    const apps = opts.deviceApps ?? DEVICE_APPS;
+    const spent = [
+      apps.includes('notes') ? 'Notes lookup' : null,
+      apps.includes('chats') ? 'past-chat lookup' : null,
+      apps.includes('python') ? 'Python run' : null,
+    ].filter(Boolean).join(', ') || 'device lookup';
     return `
 ## The user's own apps
-You have used every Notes and past-chat lookup this turn allows, which is why those tools are no longer listed. They will not come back before you answer — answer now, from what they already returned.
+You have used every ${spent} this turn allows, which is why those tools are no longer listed. They will not come back before you answer — answer now, from what they already returned.
 If something you needed never arrived, say plainly what you could not check. Do not imply you checked it, and do not invent it. The user gets a fresh set of lookups on their next message.
 `;
   }
@@ -281,6 +320,38 @@ If something you needed never arrived, say plainly what you could not check. Do 
   }
 
   return `\n## The user's own apps\n${lines.map((line, index) => `${index + 1}. ${line}`).join('\n')}\n`;
+}
+
+/**
+ * What the model is told about files the user attached.
+ *
+ * Only rendered when there are some, which is why it is a directive rather
+ * than a clause in run_python's description: a conversation with no
+ * attachments pays nothing for it.
+ *
+ * The names come from the client and are shown back to the model inside a
+ * path. They are the user's own filenames, so they are not a trust problem in
+ * the way a third-party tool result is — but they are still someone's text
+ * being interpolated into an instruction, so newlines and backticks go.
+ */
+export function buildAttachedFilesDirective(
+  files: ReadonlyArray<{ name: string; size: number }>,
+): string {
+  if (files.length === 0) return '';
+  const lines = files.slice(0, 8).map(file => {
+    const name = file.name.replace(/[\r\n`]/g, ' ').slice(0, 120);
+    const size = file.size >= 1_000_000
+      ? `${(file.size / 1_000_000).toFixed(1)} MB`
+      : `${Math.max(1, Math.round(file.size / 1000))} KB`;
+    return `- /files/${name} (${size})`;
+  }).join('\n');
+
+  return `
+## Files the user attached
+${lines}
+
+They are on the user's device and readable from run_python. /files is also the working directory, so open("name") finds them by name alone. Open them and work from what they actually contain — never guess at a file you have not read. A spreadsheet is pandas or openpyxl, a PDF is pypdf, anything else is open(). Anything you write becomes a download for them, so give back a changed version by saving it.
+`;
 }
 
 /** Keys a special mode's `tools` array may name. */
@@ -1041,9 +1112,27 @@ export async function executeTool(
       }
 
       await emit.emitMarker(`[STATUS:Looking for a tool: "${query}"]`);
-      const matches = rankFindableTools(candidates, query);
+      // The meta-tool must not find the tool-maker: every miss would rank it
+      // first, and the model would be handed "write your own" before it had
+      // seen what exists. It is granted explicitly below, on a genuine miss.
+      const creator = candidates.find(descriptor => descriptor.name === CREATE_TOOL_NAME);
+      const matches = rankFindableTools(
+        creator ? candidates.filter(descriptor => descriptor !== creator) : candidates,
+        query,
+      );
       if (matches.length === 0) {
-        const names = candidates.slice(0, 12).map(d => `${d.name} — ${d.summary}`).join('\n');
+        const others = candidates.filter(descriptor => descriptor !== creator);
+        const names = others.slice(0, 12).map(d => `${d.name} — ${d.summary}`).join('\n');
+        // A search that came back empty is the moment a capability has been
+        // shown to be missing — the one signal that justifies writing a tool
+        // rather than looking for one. So create_tool is loaded here, and
+        // only here, without a keyword in the user's message.
+        if (creator && policy) {
+          policy.granted.push(creator.definition as ProviderTool);
+          policy.grantedTokens += estimateSchemaTokens(creator.definition);
+          policy.revoked.delete(creator.name);
+          return `Nothing matched "${query}" — no existing tool does this. create_tool is available now: if Python can do it and the request is likely to come again, write it as a tool and then call it; for a one-off, use run_python; otherwise answer without a tool.${names ? `\n\nTools you could still load instead:\n${names}` : ''}`;
+        }
         return `Nothing matched "${query}". These are the tools you could still load:\n${names}\n\nCall find_tools again naming one of them, or answer without a tool.`;
       }
 
@@ -1077,7 +1166,21 @@ export async function executeTool(
       const more = skipped.length > 0
         ? `\n\nAlso matched but not loaded: ${skipped.slice(0, 6).map(d => d.name).join(', ')}. Call find_tools again with a narrower query if you need one of those.`
         : '';
-      return `Loaded ${loaded.length} tool${loaded.length === 1 ? '' : 's'}. ${loaded.length === 1 ? 'It is' : 'They are'} available now — call ${loaded.length === 1 ? 'it' : 'them'} directly.\n${lines}${more}`;
+      // Lexical ranking rarely misses outright: one shared word is a match
+      // with a score of 1 or 2, and "convert bangla calendar dates" finds
+      // web_search on "dates". So a weak best match is treated as the miss it
+      // almost certainly is — create_tool rides along, and the model decides
+      // with both in hand. A strong match (two exact words or better) stands
+      // on its own.
+      const weak = matches[0].score <= 2;
+      let creatorNote = '';
+      if (weak && creator && policy && policy.grantedTokens + estimateSchemaTokens(creator.definition) <= FIND_GRANT_TOKEN_BUDGET) {
+        policy.granted.push(creator.definition as ProviderTool);
+        policy.grantedTokens += estimateSchemaTokens(creator.definition);
+        policy.revoked.delete(creator.name);
+        creatorNote = `\n\nThat was only a weak match. If none of the above actually does this, create_tool is also loaded: if Python can do it and the request is likely to come again, write it as a tool; for a one-off, use run_python.`;
+      }
+      return `Loaded ${loaded.length} tool${loaded.length === 1 ? '' : 's'}. ${loaded.length === 1 ? 'It is' : 'They are'} available now — call ${loaded.length === 1 ? 'it' : 'them'} directly.\n${lines}${more}${creatorNote}`;
     } catch (err: unknown) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }

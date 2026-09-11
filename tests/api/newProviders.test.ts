@@ -147,7 +147,9 @@ describe('the OpenAI-compatible adapter, against AMD\'s actual wire format', () 
   });
 
   it('drops an empty system message but keeps a real one', async () => {
-    fetchMock.mockResolvedValue(sseResponse(['data: [DONE]\n\n']));
+    // A frame of real content: a stream that says nothing is now refused by
+    // guardStreamStart, which is a separate test.
+    fetchMock.mockResolvedValue(sseResponse(['data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n']));
     await callAmdAPIStreaming(
       [{ role: 'system', content: '   ' }, { role: 'user', content: 'hi' }],
       'DeepSeek-V4-Flash',
@@ -246,7 +248,7 @@ describe('LLM7', () => {
 
   it('is a known provider with its own dispatch branch', async () => {
     expect(normalizeStreamingProvider('llm7', 'cerebras')).toBe('llm7');
-    fetchMock.mockResolvedValue(sseResponse(['data: [DONE]\n\n']));
+    fetchMock.mockResolvedValue(sseResponse(['data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n']));
     await dispatchStreamingProvider('llm7', messages, undefined, {
       model: 'minimax-m2.7', temperature: 0.7, maxTokens: 100,
     });
@@ -262,13 +264,16 @@ describe('LLM7', () => {
 });
 
 describe('Air\'s chain after both providers were added', () => {
-  it('runs groq, then nvidia, then amd, then llm7', () => {
+  it('runs groq, then nvidia, then amd, then pollinations last', () => {
     const chain = buildProviderChain(
       AI_PERSONAS.default.provider,
       AI_PERSONAS.default.model,
       AI_PERSONAS.default.fallbacks,
     );
-    expect(chain.map(hop => hop.provider)).toEqual(['groq', 'nvidia', 'amd', 'llm7']);
+    // Pollinations is paid and the most dependable host in the file, so it
+    // is the last line: reached only once three free providers are down.
+    expect(chain.map(hop => hop.provider)).toEqual(['groq', 'nvidia', 'amd', 'pollinations']);
+    expect(chain[3]).toMatchObject({ model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' });
   });
 
   it('keeps every hop on a distinct provider', () => {
@@ -287,5 +292,129 @@ describe('Air\'s chain after both providers were added', () => {
     for (const hop of AI_PERSONAS.default.fallbacks) {
       expect(resolveVisionMode(hop)).toBe('ocr');
     }
+  });
+});
+
+describe('reasoning on groq', () => {
+  const originalKey = process.env.GROQ_API_KEY;
+  beforeEach(() => { process.env.GROQ_API_KEY = 'test-key'; });
+  afterEach(() => { process.env.GROQ_API_KEY = originalKey; vi.restoreAllMocks(); });
+
+  /** What the groq block puts on the wire for a persona's own settings. */
+  async function groqBody(reasoningEffort: string | undefined) {
+    const fetchMock = vi.fn(async () => sseResponse(['data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n']));
+    vi.stubGlobal('fetch', fetchMock);
+    await dispatchStreamingProvider('groq', messages, undefined, {
+      model: 'qwen/qwen3.6-27b', temperature: 0.8, maxTokens: 100, reasoningEffort,
+    });
+    return JSON.parse(fetchMock.mock.calls[0][1].body as string) as Record<string, unknown>;
+  }
+
+  it('is switched off for Air, and set low rather than off for Flow State', async () => {
+    // Measured live: without this, "what is 17*23" cost 255 completion tokens
+    // and opened with "<think>Here's a thinking process"; with it, 4 tokens
+    // and "391". gpt-oss answers 'none' with a 400, so Flow State carries its
+    // own value and must never inherit Air's.
+    const air = AI_PERSONAS.default;
+    expect(air.reasoningEffort).toBe('none');
+    expect(air.flowState.reasoningEffort).toBe('low');
+    expect(air.flowState.reasoningEffort).not.toBe(air.reasoningEffort);
+
+    expect((await groqBody(air.reasoningEffort)).reasoning_effort).toBe('none');
+    expect((await groqBody(air.flowState.reasoningEffort)).reasoning_effort).toBe('low');
+    expect((await groqBody(undefined)).reasoning_effort).toBeUndefined();
+  });
+});
+
+describe('the dispatcher guards every stream', () => {
+  const keys = { GROQ_API_KEY: process.env.GROQ_API_KEY, NVIDIA_API_KEY: process.env.NVIDIA_API_KEY };
+  beforeEach(() => { process.env.GROQ_API_KEY = 'test-key'; process.env.NVIDIA_API_KEY = 'test-key'; });
+  afterEach(() => { Object.assign(process.env, keys); vi.restoreAllMocks(); });
+
+  it('rejects a hop that opened a 200 and sent nothing, so the chain moves on', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse([
+      'data: {"choices":[{"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ])));
+    await expect(dispatchStreamingProvider('groq', messages, undefined, { model: 'qwen/qwen3.6-27b', temperature: 0.8, maxTokens: 100 }))
+      .rejects.toThrow(/answered with nothing/);
+  });
+
+  it('hands back a stream that has already started answering, intact', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => sseResponse([
+      'data: {"choices":[{"delta":{"content":"Hel"},"finish_reason":null}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ])));
+    const stream = await dispatchStreamingProvider('groq', messages, undefined, { model: 'qwen/qwen3.6-27b', temperature: 0.8, maxTokens: 100 });
+    const text = (await drain(stream)).filter(f => f.type === 'content').map(f => f.content).join('');
+    expect(text).toBe('Hello');
+  });
+
+  it('forwards reasoning_effort to nvidia only when a persona set one', async () => {
+    const fetchMock = vi.fn(async () => sseResponse([
+      'data: {"choices":[{"delta":{"content":"391"},"finish_reason":"stop"}]}\n\n', 'data: [DONE]\n\n',
+    ]));
+    vi.stubGlobal('fetch', fetchMock);
+    const hop = AI_PERSONAS.default.fallbacks.find(h => h.provider === 'nvidia')!;
+    // Verified live on this model: 'none' turns its thinking off.
+    expect(hop.model).toBe('nvidia/nemotron-3.5-lightning-30b-a3b');
+    expect(hop.vision).toBe('ocr');
+
+    await dispatchStreamingProvider('nvidia', messages, undefined, { model: hop.model, temperature: 0.8, maxTokens: 100, reasoningEffort: 'none' });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).reasoning_effort).toBe('none');
+
+    await dispatchStreamingProvider('nvidia', messages, undefined, { model: 'moonshotai/kimi-k3', temperature: 0.8, maxTokens: 100 });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body as string).reasoning_effort).toBeUndefined();
+  });
+});
+
+describe('the pollinations hop', () => {
+  const originalKey = process.env.POLLINATIONS_API_KEY;
+  beforeEach(() => { process.env.POLLINATIONS_API_KEY = 'test-key'; });
+  afterEach(() => { process.env.POLLINATIONS_API_KEY = originalKey; vi.restoreAllMocks(); });
+
+  const answer = () => sseResponse([
+    'data: {"choices":[{"delta":{"reasoning_content":"thinking..."},"finish_reason":null}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"391"},"finish_reason":"stop"}]}\n\n',
+    'data: [DONE]\n\n',
+  ]);
+
+  it('switches reasoning off three ways, and drops a reasoning delta that arrives anyway', async () => {
+    const fetchMock = vi.fn(async () => answer());
+    vi.stubGlobal('fetch', fetchMock);
+    const frames = await drain(await dispatchStreamingProvider('pollinations', messages, undefined, {
+      model: 'nvidia/nemotron-3.5-lightning', temperature: 0.8, maxTokens: 100,
+    }));
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).toMatchObject({ thinking_budget: 0, reasoning_effort: 'none', thinking: null });
+    expect(frames.filter(f => f.type === 'content').map(f => f.content)).toEqual(['391']);
+  });
+
+  it('retries without the switches when an upstream refuses them, rather than failing the last hop', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('{"error":"Unsupported parameter: thinking_budget"}', { status: 400 }))
+      .mockResolvedValueOnce(answer());
+    vi.stubGlobal('fetch', fetchMock);
+    const frames = await drain(await dispatchStreamingProvider('pollinations', messages, undefined, {
+      model: 'nvidia/nemotron-3.5-lightning', temperature: 0.8, maxTokens: 100,
+    }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const retried = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    expect(retried.thinking_budget).toBeUndefined();
+    expect(retried.reasoning_effort).toBeUndefined();
+    expect('thinking' in retried).toBe(false);
+    expect(retried.model).toBe('nvidia/nemotron-3.5-lightning');
+    expect(frames.filter(f => f.type === 'content').map(f => f.content)).toEqual(['391']);
+  });
+
+  it('does not retry any other failure', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"error":"unauthorized"}', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(dispatchStreamingProvider('pollinations', messages, undefined, {
+      model: 'nvidia/nemotron-3.5-lightning', temperature: 0.8, maxTokens: 100,
+    })).rejects.toThrow(/401/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,6 @@
 # Current status
 
-Updated 2026-09-10. Assigned work: build the owner's two requirements directly rather than working through `superplan.md` — (A) a real tool catalogue with dynamic selection, and (B) TM writing and sharing its own tools. Three rounds so far: the catalogue, then a new provider, then backlog item 0 and item 4 (MCP).
+Updated 2026-09-11. Assigned work: build the owner's two requirements directly rather than working through `superplan.md` — (A) a real tool catalogue with dynamic selection, and (B) TM writing and sharing its own tools. Three rounds so far: the catalogue, then a new provider, then backlog item 0 and item 4 (MCP).
 
 Decisions taken from the owner this session: Python and code execution run **in the browser via Pyodide**, on the existing device bridge; generated tools are **sandbox-only and auto-published** to the shared registry; MCP gets a **curated catalog on by default, toggleable, plus user-added servers in Flight Controls**; and the **tool catalogue goes first**, because everything else plugs into it.
 
@@ -110,6 +110,49 @@ After both fixes, "population" appears 1,598 characters into the Dhaka extractio
 | PRO, notes + chats | 1,558 |
 
 The honest number: **`find_tools` adds 163 tokens to every Air request that carries it** — about 5% of Air's fixed prompt. What it buys is recovery from a gate that guessed wrong, which the Padma Bridge run shows is a real capability the regexes could never have had. It is a fixed cost that replaces per-tool growth, and it is the lever most worth watching: `FIND_TOOLS_MIN_TAIL` (default 2) tunes it, and setting it above the catalogue size turns `find_tools` off for a deployment without a code change.
+
+### The gate was still too narrow — a second live pass
+
+Reported from real use: a resultant-force question got hand arithmetic and "I
+can't physically pick up a pencil for you", and a follow-up "use python to show
+it" ran Python that printed numbers and showed the user an empty card.
+
+Both were reproduced, and they had different causes.
+
+**The tool was never offered on the first turn.** "The one to the east is
+1200 N and the one to the south is 2300 N. What is the resultant force?"
+contains no arithmetic operator and none of the tool's terms — the first term
+list was built around data and charts, and a physics word problem is neither.
+The model's hand-worked angle came out at 62.43°; Python's was 62.45°, which is
+the correct one, so this was not a cosmetic miss.
+
+Two fixes:
+
+- A `quantities_in_message` predicate — two or more numbers with units. Two,
+  not one, because a single quantity is how ordinary sentences are written
+  ("call me in 5 minutes"), and the unit list excludes bare `s` so that "the
+  1980s and the 1990s" is not a physics question.
+- Maths and physics terms in `PYTHON_TERMS`: resultant, vector, magnitude,
+  force, velocity, angle, hypotenuse, quadratic, derivative, integral, and so
+  on. `draw` was deliberately left out — it would collide with
+  `generate_image`'s own terms, and the predicate already catches the case that
+  prompted this.
+
+**The tool fired and produced nothing to see.** The description said what
+`show()` does but never said *when* — so "show it" was read as "show the
+working", and the user got a collapsed card with nothing in it. The description
+now says outright that being asked to see, draw or visualise something means
+plotting it, and the guardrail's chart rule says the same in the words people
+actually use ("draw it", "sketch it", "show me").
+
+A third thing surfaced on the re-test: handed back a vector diagram it had just
+drawn, the model wrote *"Draw a horizontal arrow to the right labeled 1200 N…"*
+underneath it — instructions for drawing by hand, below the drawing. The tool
+result now says never to describe how to draw something already drawn.
+
+After all three: the same question produces one Python run, a labelled vector
+diagram with the 2594 N resultant on it, and prose that refers to the chart
+instead of narrating it.
 
 ## What is rough
 
@@ -273,28 +316,694 @@ The **"Your servers" tab** in Flight Controls does the whole flow: add by URL wi
 
 **Not verified end to end:** adding a real server, because `user_mcp_servers` does not exist in Supabase yet. `supabase/migrations/user_mcp_servers.sql` needs running in the SQL editor — the repo's convention is that migrations are applied by hand, so it was not run. Everything either side of it is verified: the crypto by unit test, the registry search live in the browser, the route logic by typecheck and the tab by rendering it. The "Could not load your servers" message in the tab today is that missing table, reported correctly.
 
+
+## Round 5 — backlog item 1: code execution and Python (A.1, A.2, A.3)
+
+Pyodide in a Web Worker, reached through the device bridge that already exists
+for Notes and chat history. The bridge did not need changing: it suspends a run
+when the model calls a tool only the browser can execute, and *why* the browser
+has to execute it — the data is here, or the sandbox is here — turned out not to
+matter to any of that machinery.
+
+### One tool, not three
+
+The brief listed three things: reliable arithmetic, analysis, and Python whose
+output the user can see. They are one runtime that differs only in where the
+output goes, so they ship as one tool, `run_python`.
+
+Three schemas would have put ~700 tokens on every request that wanted any of
+them and handed the model a classification problem it has no reason to get
+right. What is user-visible is decided by the code instead:
+
+- `show(x)` — a DataFrame becomes a real table, a figure becomes a PNG, anything
+  else becomes a text block. Calling it is the deliberate act of surfacing.
+- Any figure still open when the code finishes is captured too. Models write
+  `plt.plot(...)` and stop, or end with `plt.show()`, far more often than they
+  hand the figure over, and a drawn figure is a figure meant to be seen.
+- Files written to `/outputs` become downloads.
+- `print()` stays the model's own working.
+
+Nothing asks the user to approve anything. Showing a table is not an action that
+needs consent, and there is no approval path in this feature at all.
+
+### The sandbox
+
+- **A worker, because Pyodide is synchronous.** A `while True:` on the main
+  thread would freeze the app with no way back. `worker.terminate()` is the only
+  reliable stop — interrupting a running Python thread cooperatively needs a
+  SharedArrayBuffer, which needs cross-origin isolation headers this app does
+  not send.
+- **A clock per phase, not per call.** Starting and installing get 120s because
+  the first run downloads ~10 MB of runtime and a phone on mobile data is
+  genuinely slow; running gets 30s, because by then nothing is downloading. Each
+  phase message from the worker restarts the clock, so the budget means "stuck"
+  rather than "slow".
+- **Every failure ends in an outcome, never a throw.** Timeout, worker crash,
+  cancelled turn, a worker that never answers at all — each becomes a string the
+  model can act on.
+- **No memory ceiling is claimed.** WebAssembly memory cannot be capped per
+  instance from the page, so a large allocation ends as a Python `MemoryError` or
+  as a dead worker, and the second is handled by the crash path. What *is*
+  bounded is everything crossing back: 50 rows and 20 columns per table, 8,000
+  characters of output, 8 artifacts, 4 MB per generated file.
+- **The interpreter persists between calls**, so a model can load data once and
+  keep working with it, and is torn down after ten minutes idle. Whether that
+  cost the model anything is decided on the main thread, not in the worker: only
+  a *replacement* interpreter means state was lost, and only then is the model
+  told so.
+- **10 MB never touches the initial bundle.** The runtime and worker build as
+  separate 4 KB and 8 KB chunks that dynamically import Pyodide from the CDN;
+  `grep pyodide dist/assets/index-*.js` finds nothing.
+
+### Selection — the part the brief was actually about
+
+`run_python` is `gated` and requires a `python` capability the client declares
+per request, so an older cached bundle is never offered a tool it cannot run —
+and cannot reach it through `find_tools` either.
+
+The gate is intent terms (computation, dates, data, charts, explicit "run
+python") plus a new `calculation_in_message` predicate, because `17 * 23`
+contains no word a term list could match. It is deliberately narrow: a miss
+costs one `find_tools` round trip, and the terms cover computation rather than
+programming in general.
+
+**There is no veto.** `BUILD_TERMS`, which vetoes `generate_image`, contains
+`python`, `chart`, `graph`, `table` and `code` — the exact words that should
+*enable* this tool — and a veto also removes a tool from `find_tools`, so "give
+me an HTML table of this CSV" would lose Python entirely.
+
+### Verification, and the seven defects it found
+
+The unit tests pass a fake worker and a fake runtime; none of them can tell you
+whether Python actually runs. So the whole path was exercised in the browser —
+first the sandbox on its own, then real chat turns.
+
+The sandbox harness found four:
+
+1. **`print(a)` then `print(b)` came back as one glued token.** Pyodide's
+   `batched` stdout handler fires once per line and strips the newline. `391`
+   and `1024` arrived as `3911024` — which reads as a single wrong number
+   rather than two right ones.
+2. **The package loader narrated into stdout.** "Loading numpy, pandas…" was
+   landing in the tool result as though the model's own code had printed it.
+   Silenced with `messageCallback`, not captured.
+3. **matplotlib warnings in every chart result.** `plt.show()` with no canvas
+   warns every time, plus two of matplotlib's own deprecations raised by our
+   `savefig`. Three lines of someone else's internals in a result that worked,
+   inviting the model to apologise for it.
+4. **A one-line `NameError` arrived wrapped in four frames of
+   `_pyodide/_base.py`** — expensive on exactly the path the model is already
+   struggling on, and pointing it at the wrong code.
+
+The real chat turns found three more, and two of them were the interesting ones:
+
+5. **The tool policy told the model the opposite of what the tool was for.**
+   Rule 1 said "prefer your own knowledge and reasoning over tools", which is
+   right for a web search and precisely wrong for exact numbers. Rule 2 said
+   "when the user asks for code, write it in a code block", which turned "draw
+   me a line chart" into an HTML file the user has to save and open. Asked
+   "What is 4177 * 39281? Also draw me a line chart", the model multiplied it
+   in its head and *offered* to draw the chart later. Both rules now carry a
+   carve-out when `run_python` is offered — inside the rule rather than as a
+   rule after it, where a competing rule was losing.
+6. **`run_python` was never in the request at all.** Core tools were charged
+   against the same token budget gated tools compete for. Core is always
+   offered, so charging it there only decided *which other tool disappeared* —
+   and when the skills pair became core for anyone with a skill enabled, core
+   reached ~1,395 of Air's 1,600 and `run_python` (246) silently stopped
+   fitting. A turn that said "use Python" got a code block. The budget now
+   governs gated tools only, which is what it was always for: 700 on Air,
+   1,400 on PRO. This was a latent bug in the catalogue, not in this feature —
+   any future core tool would have done the same thing to `web_fetch`.
+7. **The model wrote `![chart](/outputs/line_chart.png)` into its answer**,
+   putting a broken image beside the working one. `/outputs` is a path inside
+   the sandbox, not a web address, and the tool result now says so.
+
+After the fixes, a real Air turn: two `run_python` calls, `164076737`, the chart
+rendered inline, `line_chart.png` offered as a 24.3 KB download, and — after a
+reload and reopening the chat from history — the chart still there, restored
+from storage.
+
+### Storage
+
+Charts are base64 PNGs and chat history is one `localStorage` blob that already
+stops saving silently at about five megabytes (LS.2). So a saved message keeps
+120 KB of artifact payload — two or three default-sized charts, newest first,
+because the newest is the one on screen — and anything beyond that has its
+payload dropped **deliberately and visibly**: the artifact stays, and the card
+says the chart was not kept rather than letting it vanish with everything else.
+
+### Files
+
+- `shared/deviceTools.ts` — `run_python`, `PYTHON_TERMS`, the descriptor, and
+  `python` as a capability that is explicitly not data-backed.
+- `shared/toolCatalog.ts` — the `calculation_in_message` predicate, and the
+  budget fix.
+- `src/services/python/` — `pythonBootstrap.ts` (the `show()` contract),
+  `pythonWorker.ts`, `pythonRuntime.ts` (lifecycle, budgets, termination),
+  `pythonResult.ts` (what the model is told, what the user sees, what is saved).
+- `src/components/chat/PythonRunCard.tsx` — collapsed by default; the code is
+  the model's working, not the answer.
+- `api/_lib/tools.ts` — the two guardrail carve-outs, and the spent-rounds
+  message now naming Python runs.
+- 39 new tests across `api/_lib/pythonTool.test.ts`,
+  `src/services/python/*.test.ts` and `deviceToolRunner.test.ts`.
+
+
+## Round 6 — backlog items 2 and 3: files, and documents (A.5)
+
+### Item 2 — where a file lives
+
+The first version of generated files did the obvious wrong thing: base64 inside
+the message. That put the bytes wherever the conversation went — a
+`localStorage` blob that already stops saving silently at about five megabytes
+(LS.2), and a Supabase JSON column — and it is why round 5 needed a 120 KB
+"artifact budget" that deliberately threw charts away. One spreadsheet would
+have broken it.
+
+So bytes live in **IndexedDB** now (`src/services/files/fileStore.ts`, the first
+in this codebase; LS.2 moves chat history alongside it), and a message carries
+only an id. Three things follow:
+
+- **A file can be big.** 25 MB each, 200 MB in total, oldest evicted first. The
+  sandbox's own per-file cap went from 4 MB to 25 MB to match — it was only the
+  tighter of the two because of the base64 it no longer does.
+- **The size budget is gone.** `pythonRunsForStorage` now bounds the *shape* —
+  how many runs, how much source — because there is no longer anything in a
+  saved message that could overflow it.
+- **"Not on this device" is a real state.** These files are device-first like
+  the rest of the conversation. The same chat opened elsewhere has the id and
+  not the bytes, and the card says so instead of showing a hole.
+
+Rendering goes through `useStoredFile`, which resolves an id to a blob URL and
+**revokes it on unmount** — a conversation with twenty charts scrolled past
+would otherwise pin every one of them for the life of the tab. It derives its
+state from the id rather than setting state in an effect, which the Hooks lint
+forbids outright (CLAUDE.md 13).
+
+Bytes also stopped being base64 on the wire. Python still hands them over that
+way, because reaching into a `bytes` object through a proxy is more machinery
+for no gain, but the worker decodes immediately and the inflated form never
+reaches a `postMessage`, a Blob, or IndexedDB.
+
+### Item 3 — PDF, Word and Excel
+
+**No new tool, and no new schema.** Pyodide already fetches numpy and pandas by
+reading the model's imports; the worker now extends that to a short allow-list
+of pure-Python wheels from PyPI. The model writes `from docx import Document`
+and it works.
+
+| import | package | what it does |
+| --- | --- | --- |
+| `fpdf` | fpdf2 | create PDFs |
+| `pypdf` | pypdf | read, merge, and operate on existing PDFs |
+| `docx` | python-docx | Word |
+| `openpyxl` / `xlsxwriter` | openpyxl / XlsxWriter | Excel |
+| `reportlab` | reportlab | PDFs with precise layout |
+
+An allow-list rather than "install whatever is imported": an import name in
+model-written code must not be able to make the browser fetch and execute an
+arbitrary package from the internet.
+
+This also means **inspecting and modifying** an existing PDF works, not only
+creating one — `pypdf` reads back a file written earlier in the same session,
+which was the half of A.5 that looked hardest.
+
+The tool description grew by one clause naming the libraries, and `PYTHON_TERMS`
+gained the words that mean "make me a file" — pdf, docx, excel, invoice, report,
+export, download. Without those, the capability exists and is unreachable,
+because `run_python` is the only thing that makes documents.
+
+### Verification, and the two defects it found
+
+Both items were driven in a browser before being wired into chat.
+
+1. **Every document run failed at line 1 with `ModuleNotFoundError: micropip`.**
+   `loadPackagesFromImports` reads the *model's* imports, and the model imports
+   `fpdf`, not `micropip` — so nothing had asked for the installer itself. It is
+   now loaded by name. The bootstrap also stopped raising when it is absent: the
+   model's own `ImportError` names the module it actually asked for, which is
+   far more use than one naming our installer.
+2. **Package loading narrated itself into the model's output.** "Loading
+   Pillow, fonttools" was appearing as though the model's code had printed it.
+   Silencing the loader's callbacks was not enough — the narration comes from
+   Pyodide's console, and micropip does it again from inside its own installs.
+   The capturing stdout handler is now attached at the last possible moment
+   before the model's code and detached the instant it finishes.
+
+Then end to end, in the app: *"Make me a PDF invoice for Acme Ltd: 3 chairs at
+45 each, 1 desk at 220, 20% VAT. I want to download it."* → one Python run, a
+1.8 KB PDF, $426.00 (correct), a working download button. After a full reload
+and reopening the chat from history, the download still works — resolved out of
+IndexedDB into a fresh blob URL, which is the whole claim of item 2.
+
+### Also fixed this round
+
+- A run that printed but drew nothing showed a bare "Ran Python · 1.0s" row,
+  which reads as nothing having happened. It now shows the first lines of output
+  inline. Reported from real use.
+- The first-run shimmer says "Starting Python (first run takes a moment)". That
+  phase only ever fires when there is no interpreter, which is the run that
+  downloads ten megabytes.
+
+
+## Round 7 — uploads, and the rough edges. Part A is done.
+
+### `run_python` is `core` now
+
+Two rounds of widening a keyword gate, and each fix only closed the phrasing
+that had already failed in front of a user. So the tier changed instead.
+
+`core` in this codebase means "a capability the user has, not a guess about
+what they meant" — which is exactly what a code sandbox is, and the same
+argument that makes their own notes core. The failure the gating mechanism was
+built for is an unwanted *picture*; Python that is offered and not needed simply
+does not get called.
+
+It costs ~290 tokens on every Air message. The `select` spec is kept on the
+descriptor rather than deleted: changing one word puts the gate back, and a test
+holds it to still recognising the turns it was widened for.
+
+### Uploads — the other half of item 2
+
+A file the user attaches now goes into the device file store as well as through
+text extraction, and is **mounted into the sandbox** at `/files/<name>` before
+the code runs. `run_python` can open the user's own spreadsheet, PDF or archive
+instead of only data the model typed into its own code.
+
+- **Which files a turn can reach is read off the transcript**, not tracked
+  separately. A message carries an `AttachedFile` reference, so a spreadsheet
+  attached five turns ago is still openable, and it comes back after a reload
+  for free. Names are made unique once, because the same string has to be both
+  the path the model is told about and the path the file is written to.
+- **The model is told only when there is something to tell.** A conversation
+  with no attachments pays nothing: the directive is built per request and is
+  empty otherwise. It is also only appended when `run_python` is actually in the
+  request — naming files the model cannot open is the same mistake as promising
+  an app tool it was not given.
+- **Binary documents can be attached at all now.** `.xlsx`, `.docx`, `.pptx`,
+  `.parquet`, `.zip` and friends used to be rejected outright, correctly: there
+  was nothing that could open them. The size limit went from 10 MB to 25 MB, to
+  match the file store.
+- **`/files` is the working directory.** Models write `open("name")` far more
+  often than an absolute path, and a FileNotFoundError for a file the user
+  plainly attached is the worst possible answer. Bare writes land there too, so
+  the file sweep walks both directories and a file written next to the input is
+  offered as a download exactly like one written to `/outputs`.
+
+### Prices stopped rendering as LaTeX
+
+`remark-math` is configured with single-dollar inline maths on purpose, and
+there is a test protecting it. The cost was that any answer with two prices in
+it turned everything between them into italic LaTeX — the generated invoice from
+round 6 came out as a wall of mathematical italics with the digits scrambled.
+
+Rather than turn the feature off, `escapeCurrencyAmounts` escapes a `$` that is
+immediately followed by a digit. `$x^2$` and `$$3x$$` still render; code fences
+and backticks are skipped, where a stray backslash would be a visible bug. What
+it breaks is inline maths starting with a bare digit — `$3x$` — which is rarer
+in a chat app than a price, and is the whole trade.
+
+### Four defects the live run found
+
+1. **The attachment never reached the request.** `handleSendMessageWithRateLimit`
+   in `App.tsx` — and its twin in `HomePage` — is a fixed-arity wrapper, so the
+   ninth argument was dropped on the floor with no type error anywhere, because
+   every parameter is optional. The file was in the store, on the message, and
+   invisible to the request.
+2. **`apiUserMessage` dropped it too.** The API copy of the user's turn is built
+   field by field, so the first turn after an upload — the one that usually
+   wants the file — could not see it.
+3. **`df.to_excel(...)` failed on a missing openpyxl.** Auto-install reads the
+   code's imports, and pandas reaches openpyxl from the inside without one. The
+   worker now also matches a few usage patterns. What made this worth fixing
+   properly was the model's response to it: `!pip install`, then a shell
+   command, then `subprocess` — three rounds spent on things that do not exist
+   here. A failed import now says so outright.
+4. **The model wrote a bare filename** and got a FileNotFoundError for a file
+   that was plainly attached. Fixed by the working directory, above.
+
+Verified end to end with a `.xlsx` the model had never seen — generated in the
+sandbox, attached as a binary file with no extractable text, and read back with
+pandas: exact rows, exact numbers. Then a CSV attached and returned as a real
+Excel file with computed columns.
+
+### Part A is complete
+
+| | | |
+| --- | --- | --- |
+| A.1 | Code execution for reliable results | round 5 |
+| A.2 | Python analysis | round 5 |
+| A.3 | User-visible Python — tables, charts, downloads | round 5 |
+| A.4 | Web fetch | round 1 |
+| A.5 | PDF / Word / Excel, created **and** inspected and modified | rounds 6–7 |
+| A.6 | Usable MCP, and a registry to search | rounds 3–4 |
+
 ## What is rough
 
-1. **`minimax-m2.7` is not usable on the current LLM7 key**, and the chain ships `default` instead. One line to change back once there is balance.
-2. **AMD's reachability** — unchanged from round 2, and it now sits third rather than first, which limits the damage.
-3. **Neither AMD nor LLM7 has served a tool-using turn in the real app**, only in direct dispatch tests. They are third and fourth in the chain, so reaching them takes two providers failing at once.
-4. **MCP matching terms are a heuristic** derived from descriptions someone else wrote.
-5. **The approval flow still has not run against a real approval-requiring server.** Every tool on the one available server is auto-approved. A user-added server is the natural way to exercise it, which needs the migration.
-6. **Registry results are not deduplicated** — the same server can appear twice under different registry entries, as "marinewatch" does.
-7. **`completeWithModel` in `mcp-approval.ts` is a seventh provider dispatch** and does not stream. It knows about AMD now but not LLM7.
-8. Everything still open from earlier rounds: sticky provider within a turn, unbounded conversation history, the stale-chunk failure on "Open in Notes", PRO costing a Trigger job per device round, `<memory>` tags only on the final leg, `NotesPage` as a second writer, lexical search in `chats_search` / `notes_search`.
+1. **Group chat still gets no Python and no files.** It opts out of the device
+   bridge entirely — the right call for one member's notes, and only inherited
+   here. Its messages live in a different table with their own rendering, so
+   this is a real piece of work rather than a flag, and it is the largest
+   remaining gap in part A's reach.
+2. **micropip installs at runtime, from PyPI.** No wheel is bundled, so the
+   first PDF or Word document in a session needs the network and a second or
+   two. A failed install surfaces as an `ImportError` the model is now told how
+   to read, but an offline user cannot make a document at all.
+3. **Auto-install is an allow-list, and allow-lists have edges.** Imports are
+   matched by module name and a few usage patterns (`to_excel`). A library
+   reached some third way still fails — correctly, and with a message the model
+   can act on, but it fails.
+4. **`$3x$` no longer renders as maths.** The cost of fixing prices. Inline
+   maths that begins with a digit is now literal text.
+5. **PRO needs `npm run trigger:deploy`** before `run_python` works there. The
+   route selects the tool and passes it in the payload, but the deployed Trigger
+   task holds its own copy of `isDeviceToolName`.
+6. **The first run in a session is slow** — ten megabytes of runtime, plus
+   packages on demand — and only the shimmer says so.
+7. **A file is bound to the device that made it.** That is the product's whole
+   position on storage, and it is stated in the card rather than hidden, but it
+   does mean a download offered on a phone cannot be opened on a laptop.
+8. **Rule 4 does not reliably fire.** "Never say you cannot do something until
+   you have called find_tools" is in the policy, and a model still opened a turn
+   with "I can't physically pick up a pencil for you". Making Python core
+   removed the case that mattered; the general problem is untouched.
+9. Everything still open from earlier rounds: `minimax-m2.7` unusable on the
+   current LLM7 key; AMD's reachability; neither AMD nor LLM7 having served a
+   tool-using turn in the real app; MCP matching terms being a heuristic; the
+   approval flow never exercised against a real approval-requiring server;
+   registry results not deduplicated; `completeWithModel` being a seventh
+   provider dispatch; sticky provider within a turn; unbounded conversation
+   history; the stale-chunk failure on "Open in Notes"; PRO costing a Trigger
+   job per device round; `<memory>` tags only on the final leg; `NotesPage` as
+   a second writer; lexical search in `chats_search` / `notes_search`.
+
+## Round 8 — part B: TimeMachine writes and shares its own tools (5.1–5.4)
+
+### Decisions taken from the owner, before any code
+
+- **Publishing goes browser → Supabase under RLS.** The deployment is at
+  twelve Functions and a thirteenth has already failed a production deploy, so
+  a `/api/tools` route was not an option. The insert policy says "as yourself,
+  a fresh published row, never over another user's slug"; the server reads the
+  table with the service key and validates every row again.
+- **No new sandbox restrictions.** A registry tool runs with the same reach as
+  `run_python`: the user's attached files mounted, and whatever network a
+  worker can already make. The exposure is written down under "what is rough".
+- **Signed-in publishing only; revocation by SQL.** Anonymous sessions create
+  and use tools inside the conversation and nothing of theirs reaches the
+  table. `status = 'revoked'` in the SQL editor is the whole moderation tool
+  this round.
+- **Conservative creation.** A tool is written when the user asks for one, or
+  when `find_tools` has shown the capability is missing. A one-off answer stays
+  `run_python`.
+
+### What a generated tool is
+
+A Python function plus a plain-JSON descriptor, running in the existing Pyodide
+sandbox through the existing device bridge. Nothing about the bridge changed:
+`isDeviceToolName` now also answers yes to any `tm__` name, and the agent loop,
+the suspension frame and the client loop carried a new kind of tool without
+learning a single new one.
+
+```
+model calls create_tool(slug, description, parameters, source, terms, tests)
+  → device: zod-validate the spec (shared/toolRegistrySchema.ts)
+  → device: run every test through the sandbox wrapper; a failure goes back
+    as a traceback and "fix it and call create_tool again with the same slug"
+  → device: publish (signed in) — or not, and say which
+  → the tool rides on the message as `createdTools`, and on the very next leg
+    it is offered as `core` for this conversation (`sessionTools` in the body,
+    summaries only — the code never leaves the device that wrote it)
+model calls tm__<slug>(args)
+  → server: attaches the registry code to the call if the tool came from a
+    registry row; a session tool carries nothing, the browser already has it
+  → device: checks the digest against what the registry recorded, then runs
+```
+
+Three things were designed deliberately:
+
+1. **The sandbox program.** The tool's source and the arguments cross as
+   base64 into a wrapper that `exec`s the source in its own namespace with
+   `show()` passed in, calls `main(**args)`, and prints the JSON return value
+   as the last line. Its imports are *hoisted* to the top as real statements
+   — the sandbox loads packages by parsing the program it is handed, and a
+   source inside a string literal is invisible to it. Found by reasoning, not
+   live, but it would have failed the first tool that imported pandas.
+2. **Identity is a digest over slug + signature + source**, through the
+   canonical-JSON hashing that had sat unused in `shared/agent/primitives.ts`
+   since the superplan. Not the description, not the terms: two people
+   describing the same function differently have written the same tool, and
+   the registry's unique constraint holds it once. A second publisher of
+   identical code is told it is reused. The digest is computed over the
+   *normalised* signature — a test caught the spec-as-written and the
+   spec-as-stored hashing differently because one had
+   `additionalProperties: false` filled in and the other did not.
+3. **Selection is exactly the built-ins' selection.** A registry tool is a
+   `gated` descriptor with `requires: ['python']`, its terms the author's plus
+   the slug's words, budget-capped, findable through `find_tools`. Terms are
+   validated against a reserved list — "data", "file", "image", "pdf" — so a
+   stranger's tool cannot sit next to the image generator on every picture
+   request. A session tool is `core`: the user watched it being built.
+
+### `create_tool` is a per-turn cost only when it can pay
+
+Its schema was 759 tokens in the first draft — more than Air's whole gated
+budget — and shrank to 546 by leaving out everything a validation error can
+teach faster. It is gated on asking for a tool ("make me a tool", "reusable",
+"save this as a tool") and otherwise granted by `find_tools`: on a miss, and
+on a *weak* match, because lexical ranking almost never misses outright —
+"convert bangla calendar dates" finds `web_search` on "dates" with a score of
+1, which is the miss it actually is. The meta-tool never ranks the tool-maker
+itself, or every search would have offered "write your own" first.
+
+### Verified live, anonymous, in the browser
+
+*"Make me a reusable tool that returns the weekday name for a date given as
+YYYY-MM-DD. Keep it small, with one test."*
+
+```
+leg 1 (groq)   create_tool → slug weekday_from_date, one test, terms
+device         test ran in Pyodide, passed; publish refused: anonymous
+leg 2 (nvidia) "It takes a date in YYYY-MM-DD format and returns the
+               corresponding weekday name … Ready to use!"
+card           New tool: Weekday Name Lookup · tm__weekday_from_date ·
+               Kept in this chat only · source one click away
+```
+
+*"What day of the week was 1971-03-26?"* — no tool keyword in the message —
+→ `tm__weekday_from_date` called, **"It was a Friday."** (correct), with the
+card *Used Weekday Name Lookup · 0.0s · Returned: {"date": "1971-03-26",
+"weekday": "Friday"}*.
+
+Then a full reload, the chat reopened from History, *"And 2000-01-01?"* →
+**"Saturday."** (correct), 0.9s because the interpreter was fresh — the code
+came out of the stored session.
+
+The first attempt, before any of that, wrote a 60-line taka-to-words tool with
+four tests on the first call. It was the environment that stopped it, not the
+tool — see below.
+
+### What the live run found that no unit test could
+
+1. **The deploy on `main` was already broken.** Your Vercel log:
+   `Cannot find module '/var/task/shared/toolCatalog' imported from
+   shared/deviceTools.js`. `shared/deviceTools.ts` has imported `./toolCatalog`
+   with no extension since round 1. Vite and vitest resolve it, `tsc` accepts
+   it, `vite build` never touches the server tree — so it passed every gate
+   and took the Function down at boot. Every relative import in `shared/`
+   (eleven files, mine included) now carries `.js`, and
+   `tests/api/deployableSurface.test.ts` fails on any extensionless relative
+   import under `shared/` or `api/`. That is the third class of failure this
+   project has found that only shows up at deploy; it is pinned now.
+2. **groq's free tier cannot serve a tool-writing turn reliably.** The
+   account is on `on_demand` with 1,000 output tokens per minute and 7,000
+   input. Writing a tool is ~700–1,500 output tokens, and each device leg
+   replays ~3,500 input tokens, so the second leg of a creation turn was 429'd
+   on most attempts and fell to nvidia. The error text now reaches the log —
+   `runWithProviderFallback` logs the provider's own message, bounded, where
+   before it said only "attempt 1 failed".
+3. **"The model came back with nothing" — and was charged.** Several legs
+   ended with an empty answer: no text, no tool call, `finish_reason: stop`.
+   Replaying an identical request against groq produced a clean `create_tool`
+   call, whose reasoning drafted the whole call in prose before emitting it —
+   a 27B model that stops after the draft looks exactly like an empty answer.
+   The loop now retries an empty answer **once, only while nothing has reached
+   the client** — the same thing the user's Retry button does, minus the user
+   — and logs the empty iteration with its message and tool counts. The
+   nvidia block logs the shape of an empty stream too (reasoning chunks,
+   finish reason; never content). The retry also tells the route it is a
+   retry, and the route **walks past the hop that answered with nothing** and
+   charges it a breaker failure — the fallback chain only ever saw a
+   connection that failed to open, never one that opened and said nothing,
+   which is why AMD and LLM7 were never reached while nvidia returned empty
+   200s. What is *not* fixed: an empty answer that survives the retry still
+   charges quota.
+4. **Air was thinking out loud on groq, at the user's expense.** The groq
+   block sends `reasoning_effort` only when a persona sets one, and Air set
+   nothing. Measured against the live endpoint: "what is 17*23" cost **255
+   completion tokens and opened with `<think>Here's a thinking process`** —
+   against **4 tokens and `391`** with `reasoning_effort: 'none'`. On a tier
+   that allows 1,000 output tokens a minute, that thinking was most of Air's
+   budget, and it is why tool-writing turns kept tripping the limit. Air now
+   sends `'none'`. Flow State's `gpt-oss-20b` rejects `'none'` with a 400
+   (`low`/`medium`/`high` only — also verified), so it carries its own
+   `'low'` and the override *replaces* the persona's value rather than
+   inheriting it. Pinned by a test that reads the actual groq request body.
+   Verified live after: a plain Air turn served by groq with no `<think>`
+   on the wire.
+5. **Girlie's primary was dead.** `meta-llama/llama-4-scout-17b-16e-instruct`
+   returns **404 `model_not_found`** on groq — it is simply not in the list
+   groq serves any more — and Girlie declared no fallbacks, so every Girlie
+   message died on its first hop. Now `openai/gpt-oss-120b` (see below)
+   with Air's fallback chain behind it.
+
+### The chain, made to mean it
+
+The owner's instruction: when one goes down, fire the next, and keep going
+until one works. The chain did that for a hop that failed to *connect*. It
+did not for a hop that connected and then said nothing, because
+`runWithProviderFallback` wraps opening the stream and nothing after it —
+that is what let nvidia's empty 200s end turns while AMD and LLM7 sat idle.
+
+`guardStreamStart` closes that. Every provider's stream now passes through it
+inside `dispatchStreamingProvider`: the first frames are read and held until
+one carries non-blank text or a tool call, then replayed byte for byte ahead
+of the rest. If the stream ends or fails before that, it rejects with a
+retryable `EmptyAnswerError` and the chain moves on. Nothing has reached the
+client by then, so nothing is duplicated — the retryable moment is now
+"opened and started answering", not merely "opened". Two more changes in
+the same spirit: an all-tripped breaker now tries every hop rather than
+only the primary, and the `nvidia` block forwards a persona's
+`reasoning_effort` (the `-reasoning` nemotron could not be told to stop
+thinking; `nemotron-3.5-lightning-30b-a3b` can, and does).
+
+**The chain, as shipped** (Air and Girlie alike): `groq` → `nvidia`
+(`nemotron-3.5-lightning-30b-a3b`) → `amd` (`DeepSeek-V4-Flash`) →
+`pollinations` (`nvidia/nemotron-3.5-lightning`). Pollinations replaced LLM7
+as the last line on the owner's call: it is paid and has been the most
+dependable host in the file, so it is reached only once three free providers
+are down. Its model is text-only per Pollinations' own metadata (`ocr`) and
+reasoning-capable, so the pollinations block was bulletproofed for it: the
+three reasoning switches (`thinking_budget: 0`, `reasoning_effort: 'none'`,
+`thinking: null`) go out as before, a `reasoning_content` delta is dropped
+rather than forwarded if a model thinks anyway, and — because Pollinations
+is a gateway and a strict upstream can 400 on an unknown switch, which is
+exactly what LLM7 did — a 400 is retried once with none of the switches
+rather than failing the hop. The local `.env` Pollinations key is rejected
+by the endpoint (401 on both header styles), so this hop is unit-tested
+against a recorded stream shape, not driven live from here.
+
+Girlie is `openai/gpt-oss-120b` on groq, the owner's choice. Verified
+against the live endpoint: streaming tool calls work, an image part is a 400
+("messages[0].content must be a string", so `ocr`), and `reasoning_effort`
+must be `low`/`medium`/`high` — `'none'` is a 400 — so it runs at `low`,
+with its reasoning arriving in a field the groq block never forwards.
+
+**Verified live** with groq forced to fail (a bad key in the gitignored
+`.env.local`, dev server only, removed after): a 401 is non-retryable, so
+the hand-off was immediate, and both legs of *"What is 4177 * 39281? …"* ran
+on `nvidia/nemotron-3.5-lightning-30b-a3b` — `run_python` called,
+**164,076,737** (correct), Padma River. ~40 seconds, all of it nvidia's
+queue: even a four-token answer sat 19–30 s on their free endpoint in direct
+tests. That latency is the provider's, and it is why the hop sits second.
+
+### Files
+
+New: `shared/toolRegistry.ts` (names, bounds, spec types, digest subject,
+descriptors, the sandbox wrapper, `create_tool`), `shared/toolRegistrySchema.ts`
+(zod at every boundary: model-written spec, request body, registry row, frame
+payload), `api/_lib/toolRegistry.ts` (cached load, latest-per-slug, session
+shadows registry, frame payloads, use counting), `supabase/migrations/tool_registry.sql`,
+`src/services/tools/toolRegistryService.ts` (publish under RLS: digest reuse,
+version bump, slug ownership, rate limit, revoked-identical),
+`src/services/tools/publishResult.ts`, `src/components/chat/CreatedToolCard.tsx`,
+`api/_lib/toolRegistry.test.ts`.
+
+Changed: `shared/deviceTools.ts` (`tm__` names are device tools; `tool` payload
+on the frame; `create_tool` descriptor), `api/_lib/tools.ts` (find_tools grants
+`create_tool` on a miss or weak match, never ranks it), `api/_lib/validation.ts`
+(`sessionTools`), `api/ai-proxy.ts` and `api/pro-generation.ts` (registry load,
+descriptors, frame payloads; PRO carries `registryTools` in the job),
+`trigger/proGeneration.ts` (attaches them on suspension),
+`src/services/agent/deviceToolRunner.ts` (`create_tool`, `tm__` execution with
+digest check), `src/services/ai/aiProxyService.ts` (`sessionToolsFor`, tools
+grow within a turn), `src/hooks/useChat.ts`, `src/types/chat.ts`,
+`src/services/chat/*` (persistence, validated on the way back in),
+`src/services/python/pythonResult.ts` (tool-aware wording), `PythonRunCard.tsx`
+(names the tool, marks a shared one), `api/_lib/agentLoop.ts` (empty-answer
+retry), `api/_lib/providerResilience.ts` (error detail in the log).
+
+`npm run typecheck`, `npm run lint`, `npm run build`, `npm test`: **44 files /
+438 tests**, up from 43/389.
+
+## What is rough
+
+1. **Publishing is unverified live.** `tool_registry` does not exist in
+   Supabase yet and I have no account to sign in with. The insert path, the
+   digest reuse, the version bump and the slug-ownership refusal are
+   unit-tested against the service's own branches, and the server's "table
+   missing" path is verified live (it logs once a minute and the turn goes on).
+   The first real publish will be the first test of the RLS policy itself.
+2. **A published tool runs on every other user's device with that user's
+   attached files mounted and the worker's network reach.** The owner chose no
+   new restrictions this round. The digest check stops a tampered frame, the
+   rate-limit trigger stops one account filling the table, and revocation is
+   one SQL statement — but nothing reviews code before it is offered to
+   strangers. If that position changes, the two levers are: block `fetch` in
+   the worker during execution (micropip runs before it), and run registry
+   tools without mounts.
+3. **groq's free tier is still a ceiling, a much higher one now.** With
+   reasoning off, a plain Air turn costs single-digit output tokens instead of
+   hundreds, so the 1,000/minute limit is reached by tool-writing turns rather
+   than by every turn — and when it is, the chain now genuinely carries the
+   turn to nvidia. What it cannot fix is nvidia's queue: 19–40 s per leg.
+3a. **The Pollinations hop has not been driven live.** The key in the local
+   `.env` is refused by the endpoint. The request shape and the 400 fail-open
+   are unit-tested; the first real fall-through to it in production is the
+   first live test. If the Vercel key is also stale, the last line is dead —
+   worth one look at the Vercel env.
+3b. **A hop that dies *after* its first token is still the end of the turn.**
+   By design — the text is already on the user's screen — but it means a
+   provider that streams three words and hangs is not covered. The 45 s fetch
+   timeout bounds it.
+4. **An empty answer that survives the retry is still charged.** The chain
+   now moves past the empty hop on the retry; the accounting does not know.
+5. **`create_tool` is 546 tokens.** It fits Air's 700-token gated budget on
+   its own and loses ties to cheaper tools when two others also match. Fine
+   in practice — a find_tools miss grants it regardless — but it is the
+   largest schema on the catalogue.
+6. **Registry terms are model-written.** Bounded, reserved words refused, the
+   slug's words added — but a badly chosen term still offers a stranger's tool
+   on turns it does not fit. The budget caps the damage and `find_tools`
+   remains the backstop; use counts order what fits.
+7. **300 tools is the load cap**, ordered by use. Past that the honest fix is
+   embeddings in `rankFindableTools`, which was isolated for exactly this.
+8. **PRO needs `npm run trigger:deploy`** — again. The task attaches registry
+   code on suspension and the deployed copy does not know the field.
+9. **Four empty sessions were created by the failed turns**, visible in
+   History. Pre-existing: a turn that errors still saves a session.
+10. Everything still open from earlier rounds.
 
 ## Still not done
 
-**Run two things before this is live:**
+**Run four things before this is live:**
 
-- `supabase/migrations/user_mcp_servers.sql` in the Supabase SQL editor.
-- `MCP_CREDENTIAL_KEY` in the environment — `openssl rand -base64 32`. Without it, servers needing a token cannot be added; servers needing none work fine.
-- `npm run trigger:deploy`, still outstanding from round 3, so PRO gets `find_tools`, the skills payload and the MCP fields.
+- `supabase/migrations/tool_registry.sql` in the Supabase SQL editor.
+- `supabase/migrations/user_mcp_servers.sql`, outstanding since round 4.
+- `MCP_CREDENTIAL_KEY` in the environment — `openssl rand -base64 32`.
+- `npm run trigger:deploy`, outstanding since round 3.
 
-**Items 1, 2, 3 and 5** — the Pyodide sandbox and execution tools, the file/artifact model, PDF and document creation, and the whole of part B. Unchanged; see the backlog above. Item 1 is the long pole and blocks 2, 3 and 5.
+**Part B, what remains:**
 
-Nothing was committed or pushed. `.env` was not modified.
+- 5.5 workflow assembly. The natural shape in this design is a tool that
+  declares `uses: [slug, …]` and has those tools' sources loaded into its
+  namespace before `main` runs — composition inside the sandbox, no new
+  executor. The model already chains tools across iterations for free.
+- 5.6 API integration templates. A different executor: a server-run tool
+  whose host, method and path are bound outside model-written strings and
+  whose credential comes from the user's encrypted store (4.4). Design it
+  with the credential storage, as the brief says.
 
 ------------------------------------------------------------------------------
 

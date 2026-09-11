@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import type { VercelRequest, VercelResponse } from './vercelTypes.js';
 import { apiErrorBody } from './errors.js';
+import { MAX_SESSION_TOOLS } from '../../shared/toolRegistry.js';
+import { sessionToolSummarySchema } from '../../shared/toolRegistrySchema.js';
 
 /**
  * Input bounds for the API (production-check.md 1.8).
@@ -163,12 +165,25 @@ export const aiProxyBodySchema = z.object({
   // ─── Device tool bridge (shared/deviceTools.ts) ───────────────────────────
   // Which device apps this client can execute for. Absent means none: an
   // older cached bundle must not be offered tools it cannot run.
-  deviceApps: z.array(z.enum(['notes', 'chats'])).max(8).optional(),
+  deviceApps: z.array(z.enum(['notes', 'chats', 'python'])).max(8).optional(),
   // Of those, the ones that actually hold data. Readers are left out of a
   // request with nothing to read; writers never are.
-  deviceDataPresent: z.array(z.enum(['notes', 'chats'])).max(8).optional(),
+  deviceDataPresent: z.array(z.enum(['notes', 'chats', 'python'])).max(8).optional(),
   deviceRounds: z.number().int().min(0).max(16).default(0),
+  // Files the user attached, by reference. The bytes never leave the device —
+  // this is metadata so the model can be told what it can open, and nothing
+  // here is trusted for anything but wording.
+  deviceFiles: z.array(z.object({
+    name: z.string().max(200),
+    mime: z.string().max(120),
+    size: z.number().int().min(0),
+  })).max(8).optional(),
   toolTranscript: z.array(toolTranscriptMessageSchema).max(LIMITS.maxToolTranscript).optional(),
+  // Tools this conversation created (shared/toolRegistry.ts). Summaries only:
+  // the code stays on the device that wrote it. Each becomes a descriptor the
+  // model may call, so every field is validated as if it came from the model —
+  // which is where it did come from, one leg ago.
+  sessionTools: z.array(sessionToolSummarySchema).max(MAX_SESSION_TOOLS).optional(),
 }).passthrough();
 
 export type AiProxyBody = z.infer<typeof aiProxyBodySchema>;
