@@ -76,8 +76,8 @@ const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey);
 export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
-    provider: 'groq', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-    model: 'qwen/qwen3.6-27b',
+    provider: 'pollinations', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
+    model: 'openai/gpt-5-nano',
     // Qwen 3.6 takes image parts, so an image message goes straight to it —
     // no transcription step in front. See api/_lib/vision.ts.
     vision: 'native' as const,
