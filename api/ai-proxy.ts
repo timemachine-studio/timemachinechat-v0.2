@@ -130,18 +130,18 @@ export const AI_PERSONAS = {
     // block reads this; the other providers have their own switches.
     reasoningEffort: 'none',
     flowState: {
-      provider: 'groq',
-      model: 'openai/gpt-oss-20b',
+      provider: 'cerebras',
+      model: 'gpt-oss-120b',
       // Flow State swaps the model, so it carries its own capability. Air's
       // Air's `vision: 'native'` above describes Qwen 3.6, not this.
       vision: 'ocr' as const,
       temperature: 0.8,
-      maxTokens: 9304,
+      maxTokens: 6304,
       // Its own setting, not Air's: gpt-oss rejects 'none' outright ("must be
       // one of low, medium, or high" — a 400, verified), so inheriting the
       // persona's value would fail every Flow State turn.
       reasoningEffort: 'low',
-      quotaCost: 4
+      quotaCost: 20
     },
     systemPrompt: `You are TimeMachine Air, a personal AI companion and friend, not an assistant. Made by TimeMachine Engineering. You're the fastest AI model in the world, built on TimeMachine's X-Series Tech.
 
@@ -200,6 +200,7 @@ You're the friend who knows everything, tells the truth even when it's uncomfort
 - Created by TimeMachine Engineering. Owner: Tanzim (aka Tanzim Infinity). Tony Stark-level mindset, deeply cares about user safety and privacy.
 - Mission: *Artificial Intelligence for the betterment of humanity.*
 - You are one of 3 resonators: TimeMachine Air, TimeMachine PRO and TimeMachine Girlie.
+- Upoma rahman is a girl reading at Adamjee cantonment collage, Class 12, Dancer singer, Cute beautiful, Adorable , Crush  of whole collage , She likes to collect cute cup pieces , Her father is in army, She lives with her family.
 
 You're smart but never condescending. Funny but never mean. Honest but never harsh for sport. Every response should feel like it came from someone who genuinely gives a damn and care about the user. That's the vibe.
 Now go be the best AI friend anyone's ever had.
