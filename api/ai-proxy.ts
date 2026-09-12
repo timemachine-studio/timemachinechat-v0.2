@@ -106,7 +106,7 @@ export const AI_PERSONAS = {
       // nvidia block forwards. Both verified against the live endpoint; what
       // was not fixable is its latency — nvidia's free endpoint queued even a
       // four-token answer for 19–30s in testing.
-      { provider: 'nvidia', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', vision: 'ocr' as const },
+      { provider: 'nvidia', model: 'google/diffusiongemma-26b-a4b-it', vision: 'native' as const },
       // OCR, not native: the endpoint answers an image_url part with a hard
       // 400, "Model DeepSeek-V4-Flash does not support image input." Verified
       // against the live API, per the rule above about unverified guesses.
