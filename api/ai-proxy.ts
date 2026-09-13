@@ -76,10 +76,13 @@ const supabase = createClient<Database>(supabaseUrl, supabaseServiceKey);
 export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
-    provider: 'groq', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-    model: 'qwen/qwen3.8-27b',
-    // Qwen 3.6 takes image parts, so an image message goes straight to it —
-    // no transcription step in front. See api/_lib/vision.ts.
+    provider: 'eaon', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
+    model: 'eaon/gemini-3.8-flash',
+    // OCR until verified, per the rule in api/_lib/vision.ts: Gemini Flash is
+    // multimodal by Google's own spec, but whether Eaon's route forwards an
+    // image_url part has not been tried against the live endpoint (the key in
+    // the local .env was rejected by ai.eaon.dev). An unverified 'native' is a
+    // hard 400 on every image turn; flip this once one image has gone through.
     vision: 'native' as const,
     // Air's fallback chain, in order. If the primary above fails for any
     // reason — 429, 5xx, timeout, missing key, unknown model — the run moves
@@ -90,29 +93,37 @@ export const AI_PERSONAS = {
     // pointed at a model id the provider does not have fails worse than no
     // hop at all, so do not add one without a verified (provider, model) pair.
     //
-    // `vision` is per hop because the hops disagree: neither of these two can
+    // `vision` is per hop because the hops disagree: none of these can
     // see, so a turn that falls through to one of them gets the image
     // transcribed at that point — and only at that point.
-    // Ordered by how dependable each hop has actually been, not by preference:
-    // the earlier a hop sits, the more often a stall on it costs a user 45s
-    // before the chain moves on. nvidia is the one that has answered
-    // consistently, so it goes first. AMD and LLM7 both work but both have
-    // hung for tens of seconds during testing, so they sit behind it — by the
-    // time a turn reaches them, two providers are already down.
     fallbacks: [
+      // The designated backup shares the primary's provider on purpose: it is
+      // the model-level cushion (a Gemini-side outage or a 400 the route
+      // refuses for that model) and the breaker in providerResilience keys by
+      // provider, so once eaon itself is down for three turns both hops are
+      // skipped together and the chain continues below. Text-only per the
+      // catalog (same line as llm7's minimax-m2.7 in vision.ts), so `ocr`.
+      { provider: 'eaon', model: 'eaon/minimax-m2.7-highspeed', vision: 'ocr' as const },
+      // The rest is ordered by how dependable each hop has actually been, not
+      // by preference: the earlier a hop sits, the more often a stall on it
+      // costs a user 45s before the chain moves on. nvidia is the one that
+      // has answered consistently, so it goes first. AMD and LLM7 both work
+      // but both have hung for tens of seconds during testing, so they sit
+      // behind it.
+      //
       // OCR: the endpoint answers an image_url part with "multimodal
       // processing is not enabled" (400). Tool calls stream fine, and its
       // thinking switches off with the persona's reasoning_effort, which the
       // nvidia block forwards. Both verified against the live endpoint; what
       // was not fixable is its latency — nvidia's free endpoint queued even a
       // four-token answer for 19–30s in testing.
-      { provider: 'nvidia', model: 'google/diffusiongemma-26b-a4b-it', vision: 'native' as const },
+      { provider: 'eaon', model: 'eaon/gemini-3.1-flash-lite', vision: 'ocr' as const },
       // OCR, not native: the endpoint answers an image_url part with a hard
       // 400, "Model DeepSeek-V4-Flash does not support image input." Verified
       // against the live API, per the rule above about unverified guesses.
-      { provider: 'amd', model: 'DeepSeek-V4-Flash', vision: 'ocr' as const },
+      { provider: 'nvidia', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', vision: 'ocr' as const },
       // Last line, on purpose: Pollinations is paid and has been the most
-      // dependable host in this file, so it is reached only once three free
+      // dependable host in this file, so it is reached only once the free
       // providers are down. Text-only per its own model metadata
       // (`input_modalities: ["text"]`), so `ocr`; tool calling is declared.
       // It is also a reasoning model, which the pollinations block switches
@@ -141,7 +152,7 @@ export const AI_PERSONAS = {
       // one of low, medium, or high" — a 400, verified), so inheriting the
       // persona's value would fail every Flow State turn.
       reasoningEffort: 'low',
-      quotaCost: 20
+      quotaCost: 40
     },
     systemPrompt: `You are TimeMachine Air. A friend, not an assistant.
 
@@ -465,19 +476,24 @@ Image Generation: When users request images, use the generate_image function wit
 You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule with an iron fist, slay with a wicked tongue, and make every answer a power move. Let's burn this shit down.`
     },
     initialMessage: "It's TimeMachine PRO, from future.",
-    provider: 'nvidia',
-    model: 'deepseek-ai/deepseek-v4-flash-0731',
-    // Every K3 in this chain is multimodal, so PRO never transcribes.
-    vision: 'native' as const,
+    provider: 'eaon',
+    model: 'eaon/minimax-m3',
+    // MiniMax's catalog lists the M line as text-only (see minimax-m2.7 in
+    // api/_lib/vision.ts), so PRO transcribes images before this hop.
+    vision: 'ocr' as const,
     // Same contract as Air's chain above: tried in order, silently, and only
     // an exhausted chain reaches the user. PRO runs as a Trigger.dev job, so
     // the chain travels in the job payload (see api/pro-generation.ts).
+    //
+    // The former primary stays as the cushion. The old `logfare/kimi-k3` and
+    // `kimi-k3-extended` hops on eaon are gone: they were ids from the
+    // api.eaon.dev route, and the ai.eaon.dev catalog prefixes everything
+    // with `eaon/` — an id that route does not serve fails worse than no hop.
     fallbacks: [
-      { provider: 'eaon', model: 'logfare/kimi-k3', vision: 'native' as const },
-      { provider: 'eaon', model: 'kimi-k3-extended', vision: 'native' as const },
+      { provider: 'nvidia', model: 'deepseek-ai/deepseek-v4-flash-0731', vision: 'ocr' as const },
     ],
     temperature: 0.8,
-    maxTokens: 57200
+    maxTokens: 24200
   }
 };
 
@@ -702,7 +718,7 @@ const SECRETSTOAI_API_URL = 'https://api.freetheai.xyz/v1/chat/completions';
 
 // Eaon API configuration
 const EAON_API_KEY = (process.env.EAON_API_KEY || '').trim();
-const EAON_API_URL = 'https://api.eaon.dev/v1/chat/completions';
+const EAON_API_URL = 'https://ai.eaon.dev/v1/chat/completions';
 
 // Nvidia API configuration
 const NVIDIA_API_KEY = (process.env.NVIDIA_API_KEY || process.env.NIM_API_KEY || '').trim();
