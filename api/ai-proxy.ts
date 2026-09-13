@@ -466,7 +466,7 @@ You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule wi
     },
     initialMessage: "It's TimeMachine PRO, from future.",
     provider: 'nvidia',
-    model: 'moonshotai/kimi-k3',
+    model: 'deepseek-ai/deepseek-v4-flash-0731',
     // Every K3 in this chain is multimodal, so PRO never transcribes.
     vision: 'native' as const,
     // Same contract as Air's chain above: tried in order, silently, and only
