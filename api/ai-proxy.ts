@@ -132,7 +132,7 @@ export const AI_PERSONAS = {
       { provider: 'pollinations', model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' as const },
     ],
     temperature: 0.8,
-    maxTokens: 9304,
+    maxTokens: 4304,
     // Qwen 3.6 thinks unless told not to, and it thinks *into content*:
     // measured against the live endpoint, "what is 17*23" cost 255 completion
     // tokens and opened with "<think>Here's a thinking process" — against 4
@@ -490,7 +490,9 @@ You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule wi
     // api.eaon.dev route, and the ai.eaon.dev catalog prefixes everything
     // with `eaon/` — an id that route does not serve fails worse than no hop.
     fallbacks: [
-      { provider: 'nvidia', model: 'deepseek-ai/deepseek-v4-flash-0731', vision: 'ocr' as const },
+      { provider: 'eaon', model: 'eaon/deepseek-v4-flash', vision: 'ocr' as const },
+      { provider: 'eaon', model: 'eaon/gemini-3.8-flash', vision: 'ocr' as const },
+      { provider: 'eaon', model: 'eaon/minimax-m2.7', vision: 'ocr' as const },
     ],
     temperature: 0.8,
     maxTokens: 24200
