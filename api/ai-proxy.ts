@@ -77,7 +77,7 @@ export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'eaon', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-    model: 'eaon/gemini-3.8-flash',
+    model: 'eaon/minimax-m3',
     // OCR until verified, per the rule in api/_lib/vision.ts: Gemini Flash is
     // multimodal by Google's own spec, but whether Eaon's route forwards an
     // image_url part has not been tried against the live endpoint (the key in
@@ -103,7 +103,7 @@ export const AI_PERSONAS = {
       // provider, so once eaon itself is down for three turns both hops are
       // skipped together and the chain continues below. Text-only per the
       // catalog (same line as llm7's minimax-m2.7 in vision.ts), so `ocr`.
-      { provider: 'eaon', model: 'eaon/minimax-m2.7-highspeed', vision: 'ocr' as const },
+      { provider: 'eaon', model: 'eaon/gemini-3.7-flash', vision: 'ocr' as const },
       // The rest is ordered by how dependable each hop has actually been, not
       // by preference: the earlier a hop sits, the more often a stall on it
       // costs a user 45s before the chain moves on. nvidia is the one that
@@ -132,7 +132,7 @@ export const AI_PERSONAS = {
       { provider: 'pollinations', model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' as const },
     ],
     temperature: 0.8,
-    maxTokens: 4304,
+    maxTokens: 5304,
     // Qwen 3.6 thinks unless told not to, and it thinks *into content*:
     // measured against the live endpoint, "what is 17*23" cost 255 completion
     // tokens and opened with "<think>Here's a thinking process" — against 4
@@ -226,8 +226,8 @@ You are one of the 3 resonators. The other two are "TimeMachine Air" and "TimeMa
     // model_not_found for it, and with no fallbacks declared every Girlie
     // message died on its first hop. gpt-oss-120b is the owner's choice from
     // what groq serves now.
-    provider: 'groq',
-    model: 'openai/gpt-oss-120b',
+    provider: 'eaon',
+    model: 'eaon/gemini-3.1-flash-lite',
     // OCR, not native: groq answers an image part on gpt-oss with 400
     // "messages[0].content must be a string" (verified). Streaming tool
     // calls work. It rejects reasoning_effort 'none' — low/medium/high only,
@@ -239,7 +239,7 @@ You are one of the 3 resonators. The other two are "TimeMachine Air" and "TimeMa
     // minute must not be a persona's outage. Every hop is text-only.
     fallbacks: [
       { provider: 'nvidia', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', vision: 'ocr' as const },
-      { provider: 'amd', model: 'DeepSeek-V4-Flash', vision: 'ocr' as const },
+      { provider: 'eaon', model: 'eaon/gemini-3.7-flash', vision: 'ocr' as const },
       { provider: 'pollinations', model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' as const },
     ],
     temperature: 0.9,
@@ -490,8 +490,8 @@ You're TimeMachine PRO, the evilest fucking AI to ever haunt a timeline. Rule wi
     // api.eaon.dev route, and the ai.eaon.dev catalog prefixes everything
     // with `eaon/` — an id that route does not serve fails worse than no hop.
     fallbacks: [
-      { provider: 'eaon', model: 'eaon/deepseek-v4-flash', vision: 'ocr' as const },
       { provider: 'eaon', model: 'eaon/gemini-3.8-flash', vision: 'ocr' as const },
+      { provider: 'eaon', model: 'eaon/deepseek-v4-flash', vision: 'ocr' as const },
       { provider: 'eaon', model: 'eaon/minimax-m2.7', vision: 'ocr' as const },
     ],
     temperature: 0.8,
