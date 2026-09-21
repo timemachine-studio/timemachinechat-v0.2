@@ -77,7 +77,7 @@ export const AI_PERSONAS = {
   default: {
     name: 'TimeMachine Air',
     provider: 'eaon', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-    model: 'eaon/minimax-m3',
+    model: 'eaon/gemini-3.1-flash-lite',
     // MiniMax M3 is text-only on this route. Transcribe image turns instead of
     // handing it an image_url part and turning an otherwise valid chat into a
     // provider error.
@@ -101,7 +101,7 @@ export const AI_PERSONAS = {
       // provider, so once eaon itself is down for three turns both hops are
       // skipped together and the chain continues below. Text-only per the
       // catalog (same line as llm7's minimax-m2.7 in vision.ts), so `ocr`.
-      { provider: 'eaon', model: 'eaon/gemini-3.7-flash', vision: 'ocr' as const },
+      { provider: 'eaon', model: 'eaon/gemini-3.8-flash', vision: 'ocr' as const },
       // The rest is ordered by how dependable each hop has actually been, not
       // by preference: the earlier a hop sits, the more often a stall on it
       // costs a user 45s before the chain moves on. nvidia is the one that
@@ -115,7 +115,7 @@ export const AI_PERSONAS = {
       // nvidia block forwards. Both verified against the live endpoint; what
       // was not fixable is its latency — nvidia's free endpoint queued even a
       // four-token answer for 19–30s in testing.
-      { provider: 'eaon', model: 'eaon/gemini-3.1-flash-lite', vision: 'ocr' as const },
+      { provider: 'eaon', model: 'eaon/minimax-m3', vision: 'ocr' as const },
       // OCR, not native: the endpoint answers an image_url part with a hard
       // 400, "Model DeepSeek-V4-Flash does not support image input." Verified
       // against the live API, per the rule above about unverified guesses.
