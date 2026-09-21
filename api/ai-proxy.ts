@@ -78,12 +78,10 @@ export const AI_PERSONAS = {
     name: 'TimeMachine Air',
     provider: 'eaon', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
     model: 'eaon/minimax-m3',
-    // OCR until verified, per the rule in api/_lib/vision.ts: Gemini Flash is
-    // multimodal by Google's own spec, but whether Eaon's route forwards an
-    // image_url part has not been tried against the live endpoint (the key in
-    // the local .env was rejected by ai.eaon.dev). An unverified 'native' is a
-    // hard 400 on every image turn; flip this once one image has gone through.
-    vision: 'native' as const,
+    // MiniMax M3 is text-only on this route. Transcribe image turns instead of
+    // handing it an image_url part and turning an otherwise valid chat into a
+    // provider error.
+    vision: 'ocr' as const,
     // Air's fallback chain, in order. If the primary above fails for any
     // reason — 429, 5xx, timeout, missing key, unknown model — the run moves
     // to the next entry without the user seeing anything. Only when every
@@ -1813,6 +1811,48 @@ export async function callNvidiaAPIStreaming(
   });
 }
 
+/**
+ * Eaon's model routes do not all accept the same optional reasoning fields.
+ * In particular, the official MiniMax M3 route returns 200 for this plain
+ * OpenAI-compatible body (including tools), but returns 502 when the generic
+ * reasoning-disable controls below are added. Keep the exception at
+ * the request-builder boundary so streaming and non-streaming cannot drift.
+ */
+export function buildEaonRequestBody(
+  messages: ProviderMessage[],
+  model: string,
+  temperature: number,
+  stream: boolean,
+  maxTokens?: number,
+  tools?: ProviderTool[],
+): ProviderRequest {
+  const cleanedMessages = messages.filter(msg =>
+    msg.role !== 'system' || (typeof msg.content === 'string' ? msg.content.trim() !== '' : !!msg.content)
+  );
+
+  const requestBody: ProviderRequest = {
+    model,
+    messages: cleanedMessages,
+    temperature,
+    stream,
+  };
+
+  if (!/^eaon\/minimax-/i.test(model)) {
+    requestBody.thinking_budget = 0;
+    requestBody.reasoning_effort = 'none';
+    requestBody.thinking = null;
+  }
+
+  if (maxTokens) requestBody.max_tokens = maxTokens;
+
+  if (tools && tools.length > 0) {
+    requestBody.tools = tools;
+    requestBody.tool_choice = 'auto';
+  }
+
+  return requestBody;
+}
+
 // Eaon API function (streaming)
 export async function callEaonAPIStreaming(
   messages: ProviderMessage[],
@@ -1825,37 +1865,11 @@ export async function callEaonAPIStreaming(
     throw new Error('EAON_API_KEY is not configured for Eaon requests');
   }
 
-  // Filter out empty system messages
-  const cleanedMessages = messages.filter(msg =>
-    // A system message is always plain text; the parts form only ever appears
-    // on the user turn a native-vision run attached images to, and that one is
-    // never empty.
-    msg.role !== 'system' || (typeof msg.content === 'string' ? msg.content.trim() !== '' : !!msg.content)
-  );
-
-  const requestBody: ProviderRequest = {
-    model: model,
-    messages: cleanedMessages,
-    temperature,
-    stream: true,
-    // --- Bulletproof Thinking/Reasoning Deactivation ---
-    thinking_budget: 0,          // Maps to Gemini / Open-source routers
-    reasoning_effort: "none",    // Maps to OpenAI-style routers
-    thinking: null               // Maps to Anthropic-style routers
-  };
-
-  if (maxTokens) {
-    requestBody.max_tokens = maxTokens;
-  }
-
-  if (tools && tools.length > 0) {
-    requestBody.tools = tools;
-    requestBody.tool_choice = "auto";
-  }
+  const requestBody = buildEaonRequestBody(messages, model, temperature, true, maxTokens, tools);
 
   console.log('Eaon API Request:', {
     model,
-    messageCount: cleanedMessages.length,
+    messageCount: requestBody.messages.length,
     url: EAON_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0
@@ -2525,37 +2539,11 @@ async function callEaonAPI(
     throw new Error('EAON_API_KEY is not configured for Eaon requests');
   }
 
-  // Filter out empty system messages
-  const cleanedMessages = messages.filter(msg =>
-    // A system message is always plain text; the parts form only ever appears
-    // on the user turn a native-vision run attached images to, and that one is
-    // never empty.
-    msg.role !== 'system' || (typeof msg.content === 'string' ? msg.content.trim() !== '' : !!msg.content)
-  );
-
-  const requestBody: ProviderRequest = {
-    model: model,
-    messages: cleanedMessages,
-    temperature,
-    stream: false,
-    // --- Bulletproof Thinking/Reasoning Deactivation ---
-    thinking_budget: 0,          // Maps to Gemini / Open-source routers
-    reasoning_effort: "none",    // Maps to OpenAI-style routers
-    thinking: null               // Maps to Anthropic-style routers
-  };
-
-  if (maxTokens) {
-    requestBody.max_tokens = maxTokens;
-  }
-
-  if (tools && tools.length > 0) {
-    requestBody.tools = tools;
-    requestBody.tool_choice = "auto";
-  }
+  const requestBody = buildEaonRequestBody(messages, model, temperature, false, maxTokens, tools);
 
   console.log('Eaon API Request (non-streaming):', {
     model,
-    messageCount: cleanedMessages.length,
+    messageCount: requestBody.messages.length,
     url: EAON_API_URL,
     hasTools: !!(tools && tools.length > 0),
     toolCount: tools?.length || 0

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AI_PERSONAS,
   buildProviderChain,
+  buildEaonRequestBody,
   callAmdAPIStreaming,
   callLlm7APIStreaming,
   dispatchStreamingProvider,
@@ -264,18 +265,39 @@ describe('LLM7', () => {
 });
 
 describe('Air\'s chain on the Eaon route', () => {
-  it('runs gemini, then minimax highspeed, then nvidia, amd, pollinations last', () => {
+  it('runs MiniMax M3 first and keeps non-Eaon fallbacks behind it', () => {
     const chain = buildProviderChain(
       AI_PERSONAS.default.provider,
       AI_PERSONAS.default.model,
       AI_PERSONAS.default.fallbacks,
     );
-    expect(chain.map(hop => hop.provider)).toEqual(['eaon', 'eaon', 'nvidia', 'amd', 'pollinations']);
-    expect(chain[0]).toMatchObject({ model: 'eaon/gemini-3.8-flash' });
-    expect(chain[1]).toMatchObject({ model: 'eaon/minimax-m2.7-highspeed', vision: 'ocr' });
+    expect(chain.map(hop => hop.provider)).toEqual(['eaon', 'eaon', 'eaon', 'nvidia', 'pollinations']);
+    expect(chain[0]).toMatchObject({ model: 'eaon/minimax-m3' });
+    expect(resolveVisionMode(chain[0])).toBe('ocr');
     // Pollinations is paid and the most dependable host in the file, so it
     // is the last line: reached only once the free providers are down.
     expect(chain[4]).toMatchObject({ model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' });
+  });
+
+  it('sends MiniMax a plain payload because Eaon rejects the reasoning-disable fields', () => {
+    const tools: ProviderTool[] = [{
+      type: 'function',
+      function: { name: 'ping', description: 'ping', parameters: { type: 'object', properties: {} } },
+    }];
+    const body = buildEaonRequestBody(messages, 'eaon/minimax-m3', 0.8, true, 5304, tools);
+
+    expect(body).not.toHaveProperty('thinking_budget');
+    expect(body).not.toHaveProperty('reasoning_effort');
+    expect(body).not.toHaveProperty('thinking');
+    expect(body).toMatchObject({
+      model: 'eaon/minimax-m3', stream: true, max_tokens: 5304,
+      tool_choice: 'auto', tools,
+    });
+  });
+
+  it('keeps the existing reasoning controls for non-MiniMax Eaon models', () => {
+    const body = buildEaonRequestBody(messages, 'eaon/gemini-3.7-flash', 0.8, false);
+    expect(body).toMatchObject({ thinking_budget: 0, reasoning_effort: 'none', thinking: null });
   });
 
   it('keeps every hop on a distinct (provider, model) pair', () => {
