@@ -86,9 +86,19 @@ export const MODEL_VISION: Record<string, VisionCapability> = {
   // ids; same text-only statement applies.
   'eaon/minimax-m2.7-highspeed': { vision: 'ocr' },
   'eaon/minimax-m3': { vision: 'ocr' },
-  // Gemini Flash is multimodal by spec, but an image has not been sent
-  // through Eaon's route yet. OCR until it has — see AI_PERSONAS.default.
+  // Gemini can see; the route cannot. ai.eaon.dev drops every image part
+  // shape (OpenAI `image_url` as string or object, hosted or base64, Responses
+  // `input_image`, Anthropic `image`, Gemini `inline_data`) and returns 200
+  // with a text-only turn — verified 2026-09-14 on both ids, streaming and
+  // not. That is the one failure this module cannot heal at runtime: the
+  // all-native retry in ai-proxy.ts keys on a thrown error, and a 200 with the
+  // image silently gone never throws. Keep these OCR until a probe with a real
+  // image comes back describing it.
   'eaon/gemini-3.8-flash': { vision: 'ocr' },
+  'eaon/gemini-3-flash': { vision: 'ocr' },
+  'eaon/gemini-3.1-flash-lite': { vision: 'ocr' },
+  // Cerebras serves gpt-oss text-only, same as groq's 20b above.
+  'gpt-oss-120b': { vision: 'ocr' },
   // `default` is a routing selector, so which upstream serves it can change.
   // OCR is the safe reading: an image sent to a text-only upstream is a hard
   // 400, an unnecessary transcription is only a worse answer.

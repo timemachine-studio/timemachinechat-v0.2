@@ -1,3 +1,4 @@
+import { popupExit, scrimExit } from '../../utils/popupMotion';
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -191,7 +192,7 @@ export function PremiumCalendarPage() {
     }
 
     return (
-        <div className="flex h-[calc(100vh-140px)] w-full max-w-[1600px] mx-auto px-4 md:px-8 gap-6 -mt-4">
+        <div className="flex h-[calc(var(--tm-100vh)-140px)] w-full max-w-[1600px] mx-auto px-4 md:px-8 gap-6 -mt-4">
 
             {/* Sidebar */}
             <div className="hidden lg:flex flex-col w-72 shrink-0 gap-6">
@@ -371,7 +372,7 @@ export function PremiumCalendarPage() {
                         <motion.div
                             initial={{ opacity: 0 }}
                             animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
+                            exit={scrimExit}
                             className="absolute inset-0 bg-black/60 backdrop-blur-xs"
                             onClick={() => setIsEventModalOpen(false)}
                         />
@@ -379,7 +380,7 @@ export function PremiumCalendarPage() {
                             layoutId="event-modal"
                             initial={{ opacity: 0, scale: 0.95, y: 20 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                            exit={popupExit}
                             className="relative w-full max-w-[500px] rounded-[32px] bg-zinc-900 border border-white/10 shadow-2xl overflow-hidden"
                             style={{ background: 'var(--tm-popover-bg-solid)' }}
                         >

@@ -1,3 +1,4 @@
+import { popupExit } from '../../utils/popupMotion';
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -30,8 +31,17 @@ import { Message } from '../../types/chat';
 import { GroupChat, GroupChatMessage, GroupChatInvite } from '../../types/groupChat';
 import { AI_PERSONAS } from '../../config/constants';
 import ReactMarkdown from 'react-markdown';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import { useMathPlugins } from '../chat/mathPlugins';
+
+/** One member's message, with the math plugins only when it has a formula. */
+function GroupMarkdown({ text }: { text: string }) {
+  const math = useMathPlugins(text);
+  return (
+    <ReactMarkdown remarkPlugins={math?.remark ?? []} rehypePlugins={math?.rehype ?? []}>
+      {text}
+    </ReactMarkdown>
+  );
+}
 import { newId } from '../../utils/id';
 export function GroupChatPage() {
   const { id } = useParams<{ id: string }>();
@@ -217,7 +227,7 @@ export function GroupChatPage() {
       undefined, // imageData
       '', // systemPrompt
       persona,
-      undefined, // heatLevel
+      undefined, // maxMode (PRO only; group chat never runs the harness)
       undefined, // inputImageUrls
       undefined, // imageDimensions
       // onChunk
@@ -661,7 +671,7 @@ export function GroupChatPage() {
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 10 }}
+                      exit={popupExit}
                       className="absolute bottom-full left-0 right-0 mb-2 bg-[#1a1a1f] border border-white/10 rounded-xl overflow-hidden shadow-xl max-h-60 overflow-y-auto"
                     >
                       {getMentionSuggestions().map((suggestion) => (
@@ -806,7 +816,7 @@ interface GroupMessageProps {
 
 function MessageActions({ liked, onToggleLike, onReply }: { liked: boolean; onToggleLike: () => void; onReply: () => void }) {
   return (
-    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }} className="flex items-center gap-1 p-1 rounded-lg bg-black/40 backdrop-blur-xs border border-white/10">
+    <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={popupExit} className="flex items-center gap-1 p-1 rounded-lg bg-black/40 backdrop-blur-xs border border-white/10">
       <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={onToggleLike} className={`p-1.5 rounded-md hover:bg-white/10 ${liked ? 'text-red-400' : 'text-white/50'}`}>
         <Heart className={`w-3.5 h-3.5 ${liked ? 'fill-current' : ''}`} />
       </motion.button>
@@ -843,12 +853,7 @@ function GroupMessage({ message, isOwnMessage, persona, onReply }: GroupMessageP
               {AI_PERSONAS[persona].name}
             </p>
             <div className="text-white/90 prose prose-invert prose-sm max-w-none">
-              <ReactMarkdown
-                remarkPlugins={[remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-              >
-                {message.content}
-              </ReactMarkdown>
+              <GroupMarkdown text={message.content} />
             </div>
           </div>
 

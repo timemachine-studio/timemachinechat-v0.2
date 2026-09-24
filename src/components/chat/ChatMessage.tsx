@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Reply, Smile, CornerDownRight } from 'lucide-react';
 import { AIMessage } from './AIMessage';
 import { UserMessage } from './UserMessage';
-import { Message } from '../../types/chat';
+import { Message, LoadingPhase } from '../../types/chat';
 import { AI_PERSONAS } from '../../config/constants';
 import { BrandOverride } from '../brand/BrandLogo';
 import type { SavedVariation } from './MusicComposeCard';
@@ -21,7 +21,7 @@ interface ChatMessageProps extends Message {
   previousMessage?: string | null;
   isStreaming?: boolean;
   streamingMessageId?: string | null;
-  loadingPhase?: 'analyzing_photo' | 'thinking' | null;
+  loadingPhase?: LoadingPhase;
   isGroupMode?: boolean;
   currentUserId?: string;
   onReply?: (message: { id: string; content: string; sender_nickname?: string; isAI: boolean }) => void;
@@ -72,6 +72,7 @@ export function ChatMessage({
   appObjects,
   pythonRuns,
   createdTools,
+  harnessActions,
   status,
   errorCode,
   partialContent,
@@ -266,13 +267,41 @@ export function ChatMessage({
       >
         {renderReplyPreview()}
         {status === 'error' ? (
-          <FailedTurn
-            messageId={id}
-            errorCode={errorCode}
-            partialContent={partialContent}
-            onRetry={onRetry}
-            retrying={isRetrying}
-          />
+          harnessActions && harnessActions.length > 0 ? (
+            // A Max Mode turn that failed mid-way keeps everything it did on
+            // screen — text and cards, as they were — with the retry row
+            // beneath. Retry continues from the failed leg (HarnessResume).
+            <>
+              <AIMessage
+                content={partialContent ?? ''}
+                isChatMode={isChatMode}
+                messageId={id}
+                hasAnimated={true}
+                onAnimationComplete={onAnimationComplete}
+                currentPersona={currentPersona}
+                previousMessage={previousMessage}
+                isStreamingActive={false}
+                brandOverride={brandOverride}
+                harnessActions={harnessActions}
+              />
+              <div className="mt-2">
+                <FailedTurn
+                  messageId={id}
+                  errorCode={errorCode}
+                  onRetry={onRetry}
+                  retrying={isRetrying}
+                />
+              </div>
+            </>
+          ) : (
+            <FailedTurn
+              messageId={id}
+              errorCode={errorCode}
+              partialContent={partialContent}
+              onRetry={onRetry}
+              retrying={isRetrying}
+            />
+          )
         ) : mcpApproval ? (
           <McpApprovalCard
             approval={mcpApproval}
@@ -296,6 +325,7 @@ export function ChatMessage({
           brandOverride={brandOverride}
           musicVariations={musicVariations}
           onMusicVariationsChange={onMusicVariationsChange}
+          harnessActions={harnessActions}
         />
         {pythonRuns && pythonRuns.length > 0 && <PythonRunCard runs={pythonRuns} />}
         {createdTools && createdTools.length > 0 && <CreatedToolCard tools={createdTools} />}

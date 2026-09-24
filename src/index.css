@@ -1,7 +1,12 @@
 @import 'tailwindcss' source(none);
 @import './stylesheet/UniversalGlassKit.css';
+@import './stylesheet/material.css';
+@import './stylesheet/workspace.css';
+@import './stylesheet/notes.css';
+@import './stylesheet/history.css';
 @import './stylesheet/light-palette.css';
 @import './stylesheet/light.css';
+@import './stylesheet/legacy-light.css';
 @source '../index.html';
 @source './**/*.{js,ts,jsx,tsx}';
 @plugin '@tailwindcss/typography';
@@ -89,6 +94,18 @@
   --tm-pane-shadow: 0 25px 50px rgb(0 0 0 / 0.4), inset 0 1px 0 rgb(255 255 255 / 0.15);
   /* The composer. In dark only the glass edge; in light the card shadow. */
   --tm-input-shadow: inset 0 1px 0 rgb(255 255 255 / 0.1);
+  --tm-radius-panel: 28px;
+  --tm-radius-control: 9999px;
+  --tm-blur-glass: 28px;
+  --tm-blur-pane: 36px;
+  --tm-content-measure: 68ch;
+  /* Touch devices: half the radius. A backdrop blur is re-sampled on every
+     frame anything above it animates, and on a phone GPU the 28px glass was
+     most of the jank; at phone size the difference is not visible. */
+  @media (pointer: coarse) {
+    --tm-blur-glass: 14px;
+    --tm-blur-pane: 20px;
+  }
 
   /* Near-opaque popover / sheet surfaces (Contour, shop cart, note tools).
      Dark is a solid near-black; light is frosted white — see --tm-pane-bg
@@ -203,13 +220,69 @@
   font-weight: 500;
 }
 
+/* The product renders at 100%. It briefly shipped at 80% (a `zoom` on body,
+   "the density the chat shell was designed at"), and every page read as a
+   smaller copy of itself next to the legacy shell — so the zoom is 1
+   everywhere, marketing and app alike, and the same size in both shells.
+
+   The machinery stays because it is harmless at 1 and would be a large
+   removal: app styles write --tm-100vh / --tm-100dvh rather than 100vh,
+   the JS-measured --vh divides by the zoom (App.tsx), and code placing fixed
+   elements from rect coordinates goes through utils/pageZoom.ts. Setting
+   --tm-zoom to anything but 1 again would work, and would read as smaller. */
+:root {
+  --tm-zoom: 1;
+  --tm-100vh: 100vh;
+  --tm-100dvh: 100dvh;
+  --tm-safe-top: env(safe-area-inset-top, 0px);
+  --tm-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --tm-safe-left: env(safe-area-inset-left, 0px);
+  --tm-safe-right: env(safe-area-inset-right, 0px);
+}
+
+@supports (height: 100dvh) {
+  :root { --tm-100vh: 100dvh; }
+}
+
+/* Backgrounds reach the screen edges; interactive content clears iOS chrome. */
+.tm-safe-page {
+  padding-top: var(--tm-safe-top);
+  padding-bottom: var(--tm-safe-bottom);
+  padding-left: var(--tm-safe-left);
+  padding-right: var(--tm-safe-right);
+}
+.tm-safe-page > .min-h-screen {
+  min-height: calc(var(--tm-100dvh) - var(--tm-safe-top) - var(--tm-safe-bottom));
+}
+.tm-safe-frame {
+  height: calc(var(--vh, 1dvh) * 100);
+  padding-top: var(--tm-safe-top);
+  padding-left: var(--tm-safe-left);
+  padding-right: var(--tm-safe-right);
+}
+.tm-dialog-viewport {
+  padding-top: max(16px, var(--tm-safe-top));
+  padding-bottom: max(16px, var(--tm-safe-bottom));
+  padding-left: max(16px, var(--tm-safe-left));
+  padding-right: max(16px, var(--tm-safe-right));
+}
+
+:root[data-tm-scale='app'] body {
+  zoom: var(--tm-zoom);
+}
+
+/* Tailwind's screen-height utilities, inside the zoom. Unlayered, so these
+   win over the utilities layer. */
+:root[data-tm-scale='app'] .h-screen { height: var(--tm-100vh); }
+:root[data-tm-scale='app'] .min-h-screen { min-height: var(--tm-100vh); }
+:root[data-tm-scale='app'] .max-h-screen { max-height: var(--tm-100vh); }
+
 /* Prevent white borders on iOS */
 html,
 body {
   margin: 0;
   padding: 0;
-  min-height: 100vh;
-  min-height: -webkit-fill-available;
+  min-height: var(--tm-100vh);
   overflow: hidden;
   background: var(--color-canvas);
   font-family: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
@@ -220,8 +293,7 @@ body {
 
 /* Fix iOS height issues */
 #root {
-  min-height: 100vh;
-  min-height: -webkit-fill-available;
+  min-height: var(--tm-100vh);
 }
 
 /* Ensure proper touch handling on iOS */

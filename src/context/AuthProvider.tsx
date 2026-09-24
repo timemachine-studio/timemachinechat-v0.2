@@ -4,6 +4,8 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import type { Profile } from '../types/database';
 import { syncProfileToMemory } from '../services/memory/memoryService';
+import { DEV_MOCK_AUTH, DEV_MOCK_PROFILE, DEV_MOCK_SESSION, DEV_MOCK_USER } from './devMockAuth';
+import { markRecovery } from '../lib/recoveryFlag';
 
 interface AuthProviderProps {
   children: React.ReactNode;
@@ -61,7 +63,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   }
 }
 
-export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+const RealAuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [cachedUser] = useState<User | null>(readCachedUser);
   const [user, setUser] = useState<User | null>(cachedUser);
   const [session, setSession] = useState<Session | null>(null);
@@ -223,6 +225,20 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           return;
         }
 
+        // A password-reset link. The event is this tab's proof of it (see
+        // lib/recoveryFlag.ts): /reset-password opens its form only against
+        // that proof, never for an ordinary signed-in session. A link consumed
+        // on some other page (Supabase falls back to the Site URL when the
+        // redirect is not on its allowlist) is forwarded; the flag survives
+        // the navigation, the event would not.
+        if (event === 'PASSWORD_RECOVERY') {
+          markRecovery();
+          if (window.location.pathname !== '/reset-password') {
+            window.location.assign('/reset-password');
+            return;
+          }
+        }
+
         // Handle sign out
         if (event === 'SIGNED_OUT') {
           currentUserIdRef.current = null;
@@ -319,7 +335,26 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     return { error };
   };
 
-  // Reset password (sends reset link to email)
+  // The in-app reset. This is Supabase's own "Reset Password" mail, not the
+  // magic link: the forgot-password form used the sign-up OTP call before,
+  // which sent a "Log In" link that signed the person straight in with no
+  // password step (and, for a mistyped email, opened a brand-new account).
+  // The reset link carries a recovery session to /reset-password, where the
+  // new password is set. Should the project's template print {{ .Token }},
+  // the same mail also serves the code path (verifyRecoveryCode).
+  const sendPasswordReset = async (email: string) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    return { error };
+  };
+
+  const verifyRecoveryCode = async (email: string, token: string) => {
+    const { error } = await supabase.auth.verifyOtp({ email, token, type: 'recovery' });
+    return { error };
+  };
+
+  // Reset password (sends reset link to email; lands on /reset-password)
   const resetPassword = async (email: string) => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/reset-password`,
@@ -444,6 +479,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     // OTP and password functions
     signUpWithOtp,
     verifyOtp,
+    sendPasswordReset,
+    verifyRecoveryCode,
     resetPassword,
     updatePassword,
     changePassword,
@@ -451,5 +488,37 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
+
+// See devMockAuth.ts. A static signed-in value with inert auth calls; the
+// real provider is not mounted at all, so nothing here touches Supabase auth.
+const DevMockAuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
+  const [profile, setProfile] = useState<Profile>(DEV_MOCK_PROFILE);
+  const none = async () => ({ error: null });
+  const value: AuthContextType = {
+    user: DEV_MOCK_USER,
+    session: DEV_MOCK_SESSION,
+    profile,
+    loading: false,
+    profileLoading: false,
+    signUp: none,
+    signIn: none,
+    signOut: async () => { console.warn('[dev] mock auth: remove VITE_DEV_MOCK_USER from .env to sign out'); },
+    updateProfile: async (updates) => { setProfile((p) => ({ ...p, ...updates })); return { error: null }; },
+    updateLastPersona: async (persona) => { setProfile((p) => ({ ...p, last_persona: persona })); },
+    refreshProfile: async () => {},
+    isOnboarded: true,
+    needsOnboarding: false,
+    signUpWithOtp: none,
+    verifyOtp: none,
+    sendPasswordReset: none,
+    verifyRecoveryCode: none,
+    resetPassword: none,
+    updatePassword: none,
+    changePassword: none,
+  };
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+};
+
+export const AuthProvider: React.FC<AuthProviderProps> = DEV_MOCK_AUTH ? DevMockAuthProvider : RealAuthProvider;
 
 export default AuthContext;

@@ -1,10 +1,16 @@
+import { getWorkspaceMeta } from '../services/workspace/workspaceStore';
+import { DEV_MOCK_AUTH } from '../context/devMockAuth';
+import { harnessTurnKey, prepareHarnessRecovery } from '../services/workspace/harnessRecovery';
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Message, ImageDimensions, MusicVariation, ChatErrorCode, RetryContext, type AttachedFile } from '../types/chat';
+import { Message, ImageDimensions, MusicVariation, ChatErrorCode, RetryContext, type AttachedFile, type HarnessAction, type HarnessResume, LoadingPhase } from '../types/chat';
+import type { MaxModeKind } from '../../shared/maxMode';
+import { createHarnessBridge, forgetHarnessResume, harnessDeviceApps, recallHarnessResume, rememberHarnessResume, rememberWorkspaceMode, workspaceModeFor } from '../services/workspace/harnessBridge';
 import { generateAIResponse, generateAIResponseStreaming, resolveMcpApproval, getActiveProRun, streamProRun, YouTubeMusicData, UserMemoryContext } from '../services/ai/aiProxyService';
 import type { McpApprovalDecision, McpApprovalRequest } from '../types/flightControls';
 import { ChatError } from '../services/ai/chatErrors';
 import { INITIAL_MESSAGE, AI_PERSONAS } from '../config/constants';
-import { chatService, ChatSession } from '../services/chat/chatService';
+import { chatService, ChatSession, isPersistable } from '../services/chat/chatService';
+import { openingExchange, provisionalTitle } from '../services/chat/chatTitleService';
 import { processGeneratedImages } from '../services/image/imageService';
 import {
   subscribeToGroupChat,
@@ -17,6 +23,12 @@ import {
 } from '../services/groupChat/groupChatService';
 import { GroupChatParticipant } from '../types/groupChat';
 import { newId } from '../utils/id';
+import { beginRun, reconcileInterruptedRuns, recordRunEvent, settleRun } from '../services/agent/runLedger';
+import { parseDeterministicTimerIntent } from '../services/agent/deterministicActions';
+import { controlTimer, startTimer } from '../services/timer/timerRepository';
+import { privateSkillRepository } from '../services/skills/privateSkillRepository';
+import { stripPrivateModelMarkup } from '../../shared/modelOutput';
+import { retryQueuedToolPublications } from '../services/tools/toolPublicationQueue';
 
 // Format collaborative messages as dialogue for AI context
 // Bundles consecutive user messages between AI responses
@@ -84,11 +96,15 @@ function extractEmotion(content: string): string | null {
 }
 
 function cleanContent(content: string): string {
-  const emotion = extractEmotion(content);
+  const withoutPrivateContext = stripPrivateModelMarkup(content
+    .replace(/<tm_objects\b[^>]*>[\s\S]*?<\/tm_objects>/gi, '')
+    // Compatibility for the first development build of object context.
+    .replace(/\[TimeMachine objects created or changed on this turn;[^\]]*\]/gi, ''));
+  const emotion = extractEmotion(withoutPrivateContext);
   if (emotion) {
-    return content.replace(/<emotion>[a-z]+<\/emotion>/i, '').replace(/<(reason|think)>[\s\S]*?<\/\1>/gi, '').trim();
+    return withoutPrivateContext.replace(/<emotion>[a-z]+<\/emotion>/i, '').replace(/<(reason|think)>[\s\S]*?<\/\1>/gi, '').trim();
   }
-  return content.replace(/<(reason|think)>[\s\S]*?<\/\1>/gi, '').trim();
+  return withoutPrivateContext.replace(/<(reason|think)>[\s\S]*?<\/\1>/gi, '').trim();
 }
 
 /**
@@ -114,12 +130,15 @@ function markStreamingAsInterrupted(list: Message[]): Message[] {
   ));
 }
 
+/** Shown at the top of the transcript when a save was refused by the store. */
+const SAVE_FAILED_MESSAGE = "This chat couldn't be saved. Your messages are still here — check your connection, and copy anything important before leaving.";
+
 export function useChat(
   userId?: string | null,
   userProfile?: { nickname?: string | null; about_me?: string | null },
   initialPersona?: keyof typeof AI_PERSONAS,
   authLoading?: boolean,
-  initialSession?: { messages: Message[]; id: string; heat_level?: number } | null,
+  initialSession?: { messages: Message[]; id: string; name?: string; maxMode?: MaxModeKind } | null,
   flowStateActive?: boolean
 ) {
   // Start with empty state - will be initialized once we know the persona
@@ -130,7 +149,9 @@ export function useChat(
   const [currentPersona, setCurrentPersona] = useState<keyof typeof AI_PERSONAS>(initialPersona || 'default');
   // If initialSession provided, we're already initialized
   const [isInitialized, setIsInitialized] = useState(!!initialSession);
-  const [currentProHeatLevel, setCurrentProHeatLevel] = useState<number>(initialSession?.heat_level || 2);
+  // Max Mode (PRO only): null is off. Per chat, because the workspace is per
+  // chat — see src/services/workspace.
+  const [maxMode, setMaxModeState] = useState<MaxModeKind | null>(initialSession?.maxMode ?? null);
   const [currentEmotion, setCurrentEmotion] = useState<string>('joy');
   const [error, setError] = useState<string | null>(null);
   const [showAboutUs, setShowAboutUs] = useState(false);
@@ -139,7 +160,7 @@ export function useChat(
   const [useStreaming, setUseStreaming] = useState(true);
   const [youtubeMusic, setYoutubeMusic] = useState<YouTubeMusicData | null>(null);
   // Track loading phase for image pipeline UX: 'analyzing_photo' | 'thinking' | null
-  const [loadingPhase, setLoadingPhase] = useState<'analyzing_photo' | 'thinking' | null>(null);
+  const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>(null);
   // Pending remote music - music received from group chat that needs user action to play
   const [pendingRemoteMusic, setPendingRemoteMusic] = useState<YouTubeMusicData | null>(null);
   // PDF: cached extracted text for follow-up questions in this session
@@ -162,6 +183,9 @@ export function useChat(
 
   // In-flight generation, so Stop / unmount / switching chats can cancel it (1.5).
   const abortControllerRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
+
+  useEffect(() => { void reconcileInterruptedRuns(); }, []);
 
   // The assistant placeholder the in-flight turn is writing into, and the
   // turns the user has stopped. Stop has to be authoritative in the UI on its
@@ -174,12 +198,41 @@ export function useChat(
   // Track if there are unsaved changes in this session to prevent auto-saves on initial loads
   const isDirtyRef = useRef(false);
 
+  // The open chat's name. Null until it has one — a name the namer gave it,
+  // one the person typed on the history page, or the one a loaded chat came
+  // with — so a save falls back to the opening words. Before this, every
+  // save re-derived the name from the first message, which is why renaming
+  // a chat never stuck past its next reply.
+  const sessionNameRef = useRef<string | null>(initialSession?.name ?? null);
+  // Chats the namer has been asked about this page load. One ask each: a
+  // title that failed stays provisional rather than retrying on every render.
+  const namedSessionsRef = useRef<Set<string>>(new Set());
+  const currentSessionIdRef = useRef<string>(initialSession?.id || '');
+
   // Track PRO sessions we already tried to resume, to avoid duplicate reattach loops
   const proResumeAttemptedRef = useRef<Set<string>>(new Set());
 
-  // Update chatService with userId when it changes
+  // Update chatService with userId when it changes. The dev mock user
+  // (devMockAuth.ts) has no Supabase account, so a cloud save for it can only
+  // fail — and did, raising the "couldn't be saved" banner after every turn.
+  // It keeps its chats on the device, like an anonymous visitor.
   useEffect(() => {
-    chatService.setUserId(userId || null);
+    const scopedUserId = DEV_MOCK_AUTH ? null : (userId || null);
+    chatService.setUserId(scopedUserId);
+    privateSkillRepository.setUserId(scopedUserId);
+  }, [userId]);
+
+  useEffect(() => {
+    const ownerId = DEV_MOCK_AUTH ? null : (userId || null);
+    if (!ownerId) return;
+    const retry = () => { void retryQueuedToolPublications(ownerId); };
+    retry();
+    window.addEventListener('online', retry);
+    const interval = window.setInterval(retry, 60_000);
+    return () => {
+      window.removeEventListener('online', retry);
+      window.clearInterval(interval);
+    };
   }, [userId]);
 
   // Set theme based on persona
@@ -215,46 +268,47 @@ export function useChat(
     const doSave = async () => {
       try {
         const now = new Date().toISOString();
-        const firstUserMessage = messagesToSave.find(msg => !msg.isAI);
-        let sessionName = 'New Chat';
-
-        if (firstUserMessage) {
-          if (firstUserMessage.content && firstUserMessage.content.trim() &&
-            firstUserMessage.content !== '[Image message]' &&
-            !firstUserMessage.content.startsWith('[PDF:') && !firstUserMessage.content.startsWith('[File:')) {
-            sessionName = firstUserMessage.content.slice(0, 50);
-          } else if (firstUserMessage.imageData || (firstUserMessage.inputImageUrls && firstUserMessage.inputImageUrls.length > 0)) {
-            sessionName = 'Image message';
-          } else if (firstUserMessage.pdfFileName) {
-            const isPdf = firstUserMessage.pdfFileName.toLowerCase().endsWith('.pdf');
-            sessionName = isPdf ? `PDF: ${firstUserMessage.pdfFileName}` : `File: ${firstUserMessage.pdfFileName}`;
-          }
-        }
+        // The name is read here, at the moment of the write, so a title that
+        // landed while the debounce was running is what gets saved.
+        const sessionName = (sessionId === currentSessionIdRef.current && sessionNameRef.current) || provisionalTitle(messagesToSave);
 
         const session: ChatSession = {
           id: sessionId,
           name: sessionName,
           messages: messagesToSave,
           persona,
-          heat_level: persona === 'pro' ? currentProHeatLevel : undefined,
+          maxMode: persona === 'pro' && maxMode ? maxMode : undefined,
           createdAt: now,
           lastModified: now
         };
 
         await chatService.saveSession(session);
+        if (!namedSessionsRef.current.has(sessionId) && chatService.isUnnamed(session) && openingExchange(messagesToSave)) {
+          namedSessionsRef.current.add(sessionId);
+          // Naming starts only after the session exists; a fast title must
+          // not rename a row that the debounced save has not created yet.
+          void chatService.nameChat(session).then(title => {
+            if (title && currentSessionIdRef.current === sessionId) sessionNameRef.current = title;
+          }).catch(() => { /* Keep the provisional title when naming is unavailable. */ });
+        }
+        setError(prev => (prev === SAVE_FAILED_MESSAGE ? null : prev));
       } catch (error) {
+        // A local-only store makes a silent write failure unrecoverable, and
+        // the cloud path is no better while it is the only copy (A.4). Say so.
         console.error('Failed to save chat session:', error);
+        setError(SAVE_FAILED_MESSAGE);
       }
     };
 
     if (forceImmediate) {
-      // Save immediately without debounce (used when switching sessions)
-      doSave();
-    } else {
-      // Debounce saves to avoid too many requests
-      saveTimeoutRef.current = setTimeout(doSave, 500);
+      // Save immediately without debounce (used when switching sessions).
+      // Returned so a caller about to leave the page can wait for it.
+      return doSave();
     }
-  }, [currentProHeatLevel]);
+    // Debounce saves to avoid too many requests
+    saveTimeoutRef.current = setTimeout(doSave, 500);
+    return undefined;
+  }, [maxMode]);
 
   // Handle persona change
   const handlePersonaChange = useCallback((persona: keyof typeof AI_PERSONAS) => {
@@ -282,10 +336,9 @@ export function useChat(
 
     setCurrentPersona(persona);
 
-    // Reset heat level to 2 when switching to pro persona
-    if (persona === 'pro') {
-      setCurrentProHeatLevel(2);
-    }
+    // A new chat starts with the harness off: Max Mode is a per-chat choice,
+    // and the workspace it opens belongs to the chat it was opened in.
+    setMaxModeState(null);
 
     setError(null);
     setActivePdfText(null); // Clear PDF context on persona switch
@@ -293,6 +346,7 @@ export function useChat(
     // Start new chat with new persona
     const newSessionId = newId();
     setCurrentSessionId(newSessionId);
+    sessionNameRef.current = null;
 
     const initialMessage = cleanContent(AI_PERSONAS[persona].initialMessage);
     setMessages([{
@@ -332,6 +386,7 @@ export function useChat(
     // Start fresh chat with same persona
     const newSessionId = newId();
     setCurrentSessionId(newSessionId);
+    sessionNameRef.current = null;
     setActivePdfText(null); // Clear PDF context on new chat
 
     const initialMessage = cleanContent(AI_PERSONAS[currentPersona].initialMessage);
@@ -542,7 +597,7 @@ export function useChat(
           updateStreamingMessage(aiMessageId, chunk);
         },
         onStatusChange: (status: string) => {
-          setLoadingPhase(status as 'analyzing_photo' | 'thinking');
+          setLoadingPhase(status as LoadingPhase);
         },
         onComplete: (response) => {
           const emotion = extractEmotion(response.content);
@@ -653,6 +708,11 @@ export function useChat(
     }
   }, [messages, currentSessionId, currentPersona, saveChatSession, isCollaborative]);
 
+  // The session id as a ref, for work that finishes after a switch.
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
   // Set theme when loaded from initial session (history).
   // The ref, not an empty dependency array, is what makes this run once —
   // so the real dependencies can be declared honestly (1.13).
@@ -739,7 +799,7 @@ export function useChat(
   const latest = useRef({
     messages,
     currentPersona,
-    currentProHeatLevel,
+    maxMode,
     currentSessionId,
     activePdfText,
     isCollaborative,
@@ -753,7 +813,7 @@ export function useChat(
     latest.current = {
       messages,
       currentPersona,
-      currentProHeatLevel,
+      maxMode,
       currentSessionId,
       activePdfText,
       isCollaborative,
@@ -776,6 +836,32 @@ export function useChat(
     saveChatSessionRef.current = saveChatSession;
   });
 
+  /**
+   * Turn Max Mode on (with a mode) or off for the current chat.
+   *
+   * Remembered with the workspace rather than only in state, so a chat
+   * reopened from history comes back in the mode it was left in — the
+   * session record cannot carry it for signed-in users (see ChatSession).
+   */
+  const setMaxMode = useCallback((mode: MaxModeKind | null) => {
+    setMaxModeState(mode);
+    rememberWorkspaceMode(latest.current.currentSessionId, mode);
+  }, []);
+
+  /**
+   * Write the current chat out now and wait for it.
+   *
+   * For the moments a full navigation is about to happen — entering or
+   * leaving Max Mode — when the debounced save would be lost with the page.
+   * A chat with nothing but the welcome bubble is not saved: the route it
+   * lands on starts a fresh one under the same id.
+   */
+  const persistNow = useCallback(async () => {
+    const { currentSessionId: sessionId, messages: current, currentPersona: persona } = latest.current;
+    if (!sessionId || current.length <= 1) return;
+    await saveChatSession(sessionId, markStreamingAsInterrupted(current), persona, true);
+  }, [saveChatSession]);
+
   const clearTurnState = useCallback(() => {
     setStreamingMessageId(null);
     streamingMessageIdRef.current = null;
@@ -794,6 +880,17 @@ export function useChat(
   const failTurn = useCallback((aiMessageId: string, error: unknown) => {
     const code: ChatErrorCode = error instanceof ChatError ? error.code : 'UNKNOWN';
     const partial = error instanceof ChatError ? error.partialContent : undefined;
+    const resume = error instanceof ChatError ? error.resume : undefined;
+    // On the device too, so a Retry after a reload still continues. Keyed by
+    // the prompt that started the turn: message ids do not survive a reload
+    // for signed-in users.
+    if (resume && latest.current.currentSessionId) {
+      const turn = latest.current.messages;
+      const failedIndex = turn.findIndex(message => message.id === aiMessageId);
+      let userIndex = failedIndex - 1;
+      while (userIndex >= 0 && turn[userIndex].isAI) userIndex--;
+      if (userIndex >= 0) rememberHarnessResume(latest.current.currentSessionId, turn[userIndex].content, resume, harnessTurnKey(turn[userIndex]), turn[userIndex].retryContext?.maxMode);
+    }
 
     isDirtyRef.current = true;
     setMessages(prev => prev.map(msg =>
@@ -805,6 +902,9 @@ export function useChat(
           content: '',
           rawContent: undefined,
           partialContent: partial && partial.trim() ? cleanContent(partial) : undefined,
+          // The cards stay (they are on the message already); a Max Mode
+          // turn also keeps where it got to, so Retry continues from there.
+          harnessResume: resume,
           hasAnimated: true,
         }
         : msg
@@ -822,6 +922,8 @@ export function useChat(
     aiMessageId: string,
     apiMessages: Message[],
     ctx: RetryContext,
+    resume?: HarnessResume,
+    userTurn?: Pick<Message, 'id' | 'content' | 'createdAt'>,
   ) => {
     const {
       messages: _ignored,
@@ -835,13 +937,18 @@ export function useChat(
     void _ignored;
 
     const persona = ctx.persona as keyof typeof AI_PERSONAS;
+    // The user message survives Retry; the assistant placeholder does not.
+    // Using it as the run id makes every retry one logical action.
+    const runId = userTurn?.id ?? aiMessageId;
+    activeRunIdRef.current = runId;
+    await beginRun({ id: runId, sessionId: sessionId || 'unsaved', assistantMessageId: aiMessageId });
     const userMemoryContext: UserMemoryContext | undefined = profile ? {
       nickname: profile.nickname || undefined,
       about_me: profile.about_me || undefined
     } : undefined;
 
     setIsLoading(true);
-    setLoadingPhase(ctx.inputImageUrls?.length || ctx.imageData ? 'analyzing_photo' : 'thinking');
+    setLoadingPhase(ctx.inputImageUrls?.length || ctx.imageData ? 'analyzing_photo' : 'Understanding your request');
     setStreamingMessageId(aiMessageId);
     streamingMessageIdRef.current = aiMessageId;
     isStreamingRef.current = true;
@@ -861,7 +968,7 @@ export function useChat(
         ctx.imageData,
         '', // System prompt is now handled server-side
         persona,
-        persona === 'pro' ? ctx.heatLevel : undefined,
+        persona === 'pro' ? ctx.maxMode : undefined,
         ctx.inputImageUrls,
         ctx.imageDimensions,
         // onChunk callback
@@ -893,13 +1000,19 @@ export function useChat(
           }
 
           setLoadingPhase(null);
+          void settleRun(runId, 'completed', 'Completed');
+          if (activeRunIdRef.current === runId) activeRunIdRef.current = null;
           abortControllerRef.current = null;
+          // The turn made it to the end; nothing is left to continue.
+          if (ctx.maxMode && sessionId) forgetHarnessResume(sessionId, userTurn ? harnessTurnKey(userTurn) : undefined);
           completeStreamingMessageRef.current(aiMessageId, cleanedContent, response.thinking, undefined, sessionId);
         },
         // onError callback
         (error) => {
           if (approvalReceived || wasStopped()) return;
           console.error('Failed to generate streaming response:', error.message);
+          void settleRun(runId, error instanceof ChatError && error.code === 'ABORTED' ? 'cancelled' : 'failed', error.message || 'Failed');
+          if (activeRunIdRef.current === runId) activeRunIdRef.current = null;
 
           // Every failure — rate limit included — now lands as an inline
           // bubble on the turn that failed. The modal it used to raise was a
@@ -918,7 +1031,9 @@ export function useChat(
         // onStatusChange callback for image pipeline UX
         (status) => {
           if (wasStopped()) return;
-          setLoadingPhase(status as 'analyzing_photo' | 'thinking');
+          setLoadingPhase(status as LoadingPhase);
+          const runStatus = status.startsWith('Looking for') ? 'discovering' : status === 'thinking' ? 'verifying' : 'executing';
+          void recordRunEvent(runId, runStatus, status);
         },
         ctx.pdfData,
         ctx.pdfFileName,
@@ -958,8 +1073,14 @@ export function useChat(
           // is. Declaring 'python' is also the version check — an older cached
           // bundle sends the first two and is never offered a tool it cannot
           // run.
-          deviceApps: ['notes', 'chats', 'python'],
+          // A Max Mode turn declares the workspace instead: its tool set is
+          // closed on the server (selectMaxModeToolSet), and notes are not
+          // project context.
+          deviceApps: persona === 'pro' && ctx.maxMode && !collaborative
+            ? harnessDeviceApps()
+            : ['notes', 'chats', 'timer', 'private-skills', 'python', 'composed-tools'],
           currentChatSessionId: !collaborative ? sessionId : undefined,
+          runId,
           onAppObject: (object) => {
             if (wasStopped()) return;
             isDirtyRef.current = true;
@@ -993,6 +1114,36 @@ export function useChat(
               return { ...messageItem, createdTools: [...others, tool] };
             }));
           },
+          // Max Mode: the workspace this chat owns, and the cards for what
+          // the harness does in it. Group chat opts out for the same reason
+          // it opts out of notes — one member's project is not group context.
+          ...(persona === 'pro' && ctx.maxMode && sessionId && !collaborative
+            ? {
+              harness: createHarnessBridge({
+                sessionId,
+                mode: ctx.maxMode,
+                userContent: userTurn?.content ?? [...apiMessages].reverse().find(message => !message.isAI)?.content ?? '',
+                turnId: userTurn ? harnessTurnKey(userTurn) : undefined,
+                signal: controller.signal,
+                resume,
+                onAction: (action: HarnessAction) => {
+                  if (wasStopped()) return;
+                  isDirtyRef.current = true;
+                  setMessages(previous => previous.map(messageItem => {
+                    if (messageItem.id !== aiMessageId) return messageItem;
+                    // The same id settles the card it started; a new id is a
+                    // new card, appended in the order things happened.
+                    const existing = messageItem.harnessActions ?? [];
+                    const index = existing.findIndex(candidate => candidate.id === action.id);
+                    const next = index >= 0
+                      ? existing.map((candidate, i) => (i === index ? action : candidate))
+                      : [...existing, action];
+                    return { ...messageItem, harnessActions: next };
+                  }));
+                },
+              }),
+            }
+            : {}),
         },
       );
       return;
@@ -1005,7 +1156,7 @@ export function useChat(
         ctx.imageData,
         '', // System prompt is now handled server-side
         persona,
-        persona === 'pro' ? ctx.heatLevel : undefined,
+        persona === 'pro' ? ctx.maxMode : undefined,
         ctx.inputImageUrls,
         ctx.imageDimensions,
         uid || undefined,
@@ -1050,6 +1201,8 @@ export function useChat(
       setLoadingPhase(null);
       abortControllerRef.current = null;
       completeStreamingMessageRef.current(aiMessageId, cleanedContent, aiResponse.thinking, undefined, sessionId);
+      void settleRun(runId, 'completed', 'Completed');
+      if (activeRunIdRef.current === runId) activeRunIdRef.current = null;
     } catch (error) {
       if (wasStopped()) return;
       console.error('Failed to generate response:', error instanceof Error ? error.message : error);
@@ -1081,7 +1234,7 @@ export function useChat(
     const {
       messages: currentMessages,
       currentPersona: persona,
-      currentProHeatLevel: heatLevel,
+      maxMode: harnessMode,
       isCollaborative: collaborative,
       collaborativeId: collabId,
       userId: uid,
@@ -1113,7 +1266,7 @@ export function useChat(
     // this, never from whatever the UI happens to be set to later (1.10).
     const retryContext: RetryContext = {
       persona: messagePersona,
-      heatLevel: messagePersona === 'pro' ? heatLevel : undefined,
+      maxMode: messagePersona === 'pro' && harnessMode ? harnessMode : undefined,
       specialMode,
       flowState: messagePersona === 'default' ? flowState : undefined,
       imageData,
@@ -1173,6 +1326,53 @@ export function useChat(
     setIsLoading(true);
     setError(null);
 
+    // Obvious bounded actions are deterministic. They should not wait 20–60
+    // seconds for a model to rediscover a capability the product already
+    // understands, and a model cannot "decide" to claim success without the
+    // executor running. Ambiguous wording still falls through to the agent.
+    const timerIntent = !collaborative && !specialMode && !imageData && !pdfData && !attachments?.length
+      ? parseDeterministicTimerIntent(messageContent)
+      : null;
+    if (timerIntent) {
+      const aiMessageId = newId();
+      const runId = userMessage.id;
+      await beginRun({ id: runId, sessionId: latest.current.currentSessionId || 'unsaved', assistantMessageId: aiMessageId });
+      await recordRunEvent(runId, 'executing', timerIntent.kind === 'start' ? 'Starting your timer' : 'Updating your timer', timerIntent.kind === 'start' ? 'timer_start' : 'timer_control');
+      const timer = timerIntent.kind === 'start'
+        ? await startTimer(timerIntent.amount * (timerIntent.unit === 'hours' ? 3_600_000 : timerIntent.unit === 'minutes' ? 60_000 : 1_000), timerIntent.label)
+        : await controlTimer(undefined, timerIntent.action);
+      const content = timer
+        ? timerIntent.kind === 'start'
+          ? `Timer started for ${timerIntent.amount} ${timerIntent.unit}.`
+          : `${timer.label} ${timer.status === 'cancelled' ? 'cancelled' : timer.status}.`
+        : 'I could not find an active timer to update.';
+      const aiMessage: Message = {
+        id: aiMessageId,
+        createdAt: new Date(Date.parse(userMessage.createdAt ?? '') + 1 || Date.now()).toISOString(),
+        content,
+        isAI: true,
+        status: 'complete',
+        hasAnimated: false,
+        ...(timer ? { appObjects: [{
+          kind: 'timer' as const,
+          id: timer.id,
+          title: timer.label,
+          action: timerIntent.kind === 'start' ? 'started' as const : 'updated' as const,
+          status: timer.status,
+          deadlineAt: timer.deadlineAt,
+          durationMs: timer.durationMs,
+        }] } : {}),
+      };
+      const updated = [...currentMessages, userMessage, aiMessage];
+      setMessages(updated);
+      setIsLoading(false);
+      await settleRun(runId, 'completed', timer ? 'Timer updated' : 'No active timer found');
+      if (!collaborative && latest.current.currentSessionId) {
+        await saveChatSessionRef.current(latest.current.currentSessionId, updated, messagePersona, true);
+      }
+      return;
+    }
+
     // If in collaborative mode, sync user message to group_chat_messages table
     if (collaborative && collabId && uid && profile?.nickname) {
       sendGroupChatMessage(
@@ -1200,11 +1400,13 @@ export function useChat(
       }
     }
 
-    // Create placeholder AI message for streaming
+    // Create placeholder AI message for streaming. Stamped strictly after
+    // the user message: the two are made in the same tick, and a tie on
+    // created_at is a coin toss once the chat is reloaded from the database.
     const aiMessageId = newId();
     const aiMessage: Message = {
       id: aiMessageId,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(Date.parse(userMessage.createdAt ?? '') + 1 || Date.now()).toISOString(),
       content: '',
       rawContent: '',
       isAI: true,
@@ -1227,7 +1429,7 @@ export function useChat(
       setActivePdfText(pdfData);
     }
 
-    await runTurn(aiMessageId, apiMessages, retryContext);
+    await runTurn(aiMessageId, apiMessages, retryContext, undefined, userMessage);
   }, [runTurn, toApiContext]);
 
   /**
@@ -1254,7 +1456,7 @@ export function useChat(
     const userMessage = currentMessages[userIndex];
     const ctx: RetryContext = userMessage.retryContext ?? {
       persona: latest.current.currentPersona,
-      heatLevel: latest.current.currentProHeatLevel,
+      maxMode: latest.current.maxMode ?? undefined,
       flowState: latest.current.flowStateActive,
       imageData: userMessage.imageData,
       inputImageUrls: userMessage.inputImageUrls,
@@ -1264,19 +1466,32 @@ export function useChat(
     // Everything strictly before the failed turn, plus a fresh placeholder.
     const history = currentMessages.slice(0, failedIndex);
     const newAiMessageId = newId();
+    const failed = currentMessages[failedIndex];
+    // A Max Mode turn continues from the leg that failed rather than from
+    // the user's message: the settled cards come across, and the bridge
+    // replays the transcript behind them (HarnessResume). The message holds
+    // it while the page lives; the workspace holds it across a reload.
+    const sessionId = latest.current.currentSessionId;
+    const resume = ctx.maxMode
+      ? (failed.harnessResume ?? (sessionId ? await recallHarnessResume(sessionId, userMessage.content, harnessTurnKey(userMessage)) : null) ?? undefined)
+      : undefined;
 
     isDirtyRef.current = true;
     setMessages([
       ...history,
       {
         id: newAiMessageId,
-        createdAt: new Date().toISOString(),
+        // After everything before it, whatever the clock says.
+        createdAt: new Date(Math.max(Date.now(), Date.parse(userMessage.createdAt ?? '') + 1 || 0)).toISOString(),
         content: '',
         rawContent: '',
         isAI: true,
         hasAnimated: false,
         status: 'streaming',
         specialMode: ctx.specialMode,
+        ...(resume && failed.harnessActions
+          ? { harnessActions: failed.harnessActions.filter(action => action.status !== 'running') }
+          : {}),
       },
     ]);
     setError(null);
@@ -1286,8 +1501,29 @@ export function useChat(
       apiMessages = formatMessagesAsDialogue(apiMessages);
     }
 
-    await runTurn(newAiMessageId, apiMessages, ctx);
+    await runTurn(newAiMessageId, apiMessages, ctx, resume, userMessage);
   }, [runTurn, toApiContext]);
+
+  const resumeWorkspaceTurn = useCallback(async () => {
+    if (isStreamingRef.current || latest.current.isCollaborative) return;
+    const sessionId = latest.current.currentSessionId;
+    if (!sessionId) return;
+    const saved = (await getWorkspaceMeta(sessionId))?.resume;
+    if (!saved || latest.current.currentSessionId !== sessionId || isStreamingRef.current) return;
+    const mode = saved.mode ?? latest.current.maxMode ?? 'auto';
+    const recovery = prepareHarnessRecovery(latest.current.messages, saved, mode);
+    const aiMessageId = newId();
+    isDirtyRef.current = true;
+    setMaxMode(mode);
+    setMessages([...recovery.history, {
+      id: aiMessageId, content: '', rawContent: '', isAI: true, status: 'streaming',
+      createdAt: new Date().toISOString(), harnessActions: recovery.actions,
+    }]);
+    setError(null);
+    await runTurn(aiMessageId, toApiContext(recovery.history), recovery.context, {
+      content: saved.content, deviceRounds: saved.deviceRounds, toolTranscript: saved.toolTranscript,
+    }, recovery.user);
+  }, [runTurn, toApiContext, setMaxMode]);
 
   /**
    * Cancel the generation in flight and settle the turn immediately.
@@ -1305,6 +1541,10 @@ export function useChat(
     if (!aiMessageId && !controller) return;
 
     if (aiMessageId) stoppedTurnsRef.current.add(aiMessageId);
+    if (activeRunIdRef.current) {
+      void settleRun(activeRunIdRef.current, 'cancelled', 'Stopped by the user');
+      activeRunIdRef.current = null;
+    }
     controller?.abort();
     abortControllerRef.current = null;
 
@@ -1370,8 +1610,10 @@ export function useChat(
     setStreamingMessageId(null);
     setIsLoading(false);
 
-    // Filter out any empty messages from the loaded session
-    const validMessages = session.messages.filter(msg => msg.content && msg.content.trim() !== '');
+    // Filter out any empty messages from the loaded session — but a failed
+    // turn is empty by design (its text is in partialContent) and has to come
+    // back as a failed turn, or the Retry row is gone (1.10).
+    const validMessages = session.messages.filter(isPersistable);
 
     // Ensure we have at least the initial message if all messages were empty
     const messagesToLoad = validMessages.length > 0
@@ -1389,14 +1631,20 @@ export function useChat(
     setMessages(messagesToLoad);
     setChatMode(true);
     setCurrentSessionId(session.id);
+    sessionNameRef.current = session.name || null;
     setPersonaTheme(session.persona);
     setError(null);
     setActivePdfText(null); // Clear PDF context when loading a different chat
     isDirtyRef.current = false; // Reset dirty state on load
 
-    // Set heat level if it's a pro session
-    if (session.heat_level) {
-      setCurrentProHeatLevel(session.heat_level);
+    // A chat that has a workspace is a Max Mode chat, whatever the session
+    // record says: signed-in history has no column for it, and the workspace
+    // is the thing that matters.
+    setMaxModeState(session.maxMode ?? null);
+    if (session.persona === 'pro' && !session.maxMode) {
+      workspaceModeFor(session.id).then(mode => {
+        if (mode) setMaxModeState(current => current ?? mode);
+      });
     }
 
     // If a PRO generation is still running in the background for this chat,
@@ -1692,7 +1940,7 @@ export function useChat(
     isChatMode,
     isLoading,
     currentPersona,
-    currentProHeatLevel,
+    maxMode,
     currentEmotion,
     error,
     showAboutUs,
@@ -1709,9 +1957,11 @@ export function useChat(
     setChatMode,
     handleSendMessage,
     retryMessage,
+    resumeWorkspaceTurn,
     stopGeneration,
     handlePersonaChange,
-    setCurrentProHeatLevel,
+    setMaxMode,
+    persistNow,
     startNewChat,
     markMessageAsAnimated,
     dismissAboutUs,

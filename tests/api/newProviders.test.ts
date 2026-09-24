@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AI_PERSONAS,
-  buildProviderChain,
   buildEaonRequestBody,
+  buildProviderChain,
   callAmdAPIStreaming,
   callLlm7APIStreaming,
   dispatchStreamingProvider,
@@ -54,14 +54,16 @@ describe('AMD Radeon Cloud registration', () => {
 
   it('is text-only, so an image turn routed to it is transcribed first', () => {
     // Not a guess: the live endpoint returns 400 "Model DeepSeek-V4-Flash does
-    // not support image input" for an image_url part. Air lists AMD as its
-    // first fallback, so a wrong annotation here breaks every image turn the
-    // moment the primary fails.
+    // not support image input" for an image_url part. No persona chain lists
+    // AMD today (Girlie moved onto Air's route, 2026-09-16), but the
+    // registration stays, so the annotation has to stay right with it.
     expect(resolveVisionMode({ provider: 'amd', model: 'DeepSeek-V4-Flash' })).toBe('ocr');
 
-    const airAmdHop = AI_PERSONAS.default.fallbacks.find(hop => hop.provider === 'amd');
-    expect(airAmdHop).toBeDefined();
-    expect(resolveVisionMode(airAmdHop as { provider: string; model: string })).toBe('ocr');
+    for (const persona of Object.values(AI_PERSONAS)) {
+      for (const hop of (persona as { fallbacks?: { provider: string; model: string }[] }).fallbacks ?? []) {
+        if (hop.provider === 'amd') expect(resolveVisionMode(hop)).toBe('ocr');
+      }
+    }
   });
 
   it('has its own dispatch branch rather than falling through to Cerebras', async () => {
@@ -296,7 +298,7 @@ describe('Air\'s chain on the Eaon route', () => {
   });
 
   it('keeps the existing reasoning controls for non-MiniMax Eaon models', () => {
-    const body = buildEaonRequestBody(messages, 'eaon/gemini-3.7-flash', 0.8, false);
+    const body = buildEaonRequestBody(messages, 'eaon/qwen3.7-flash', 0.8, false);
     expect(body).toMatchObject({ thinking_budget: 0, reasoning_effort: 'none', thinking: null });
   });
 

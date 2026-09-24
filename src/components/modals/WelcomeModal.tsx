@@ -1,3 +1,4 @@
+import { popupExit, scrimExit } from '../../utils/popupMotion';
 import React, { useState, useEffect } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -67,7 +68,7 @@ export function WelcomeModal({ isOpen, onAccessGranted }: WelcomeModalProps) {
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                exit={scrimExit}
                 className="fixed inset-0 bg-black/80 backdrop-blur-xl z-50"
               />
             </Dialog.Overlay>
@@ -76,7 +77,7 @@ export function WelcomeModal({ isOpen, onAccessGranted }: WelcomeModalProps) {
               <motion.div
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.9 }}
+                exit={popupExit}
                 transition={{ duration: 0.4, ease: [0.4, 0, 0.2, 1] }}
                 className="fixed z-50"
                 style={{
@@ -93,7 +94,7 @@ export function WelcomeModal({ isOpen, onAccessGranted }: WelcomeModalProps) {
                     bg-linear-to-b/srgb from-white/10 to-white/5 backdrop-blur-3xl
                     border border-white/20 shadow-[0_8px_32px_rgba(139,92,246,0.2)]
                     overflow-hidden
-                    max-h-[90vh] max-h-[90dvh] overflow-y-auto"
+                    max-h-[calc(var(--tm-100dvh)*0.9)] overflow-y-auto"
                 >
                   {/* Animated background elements */}
                   <div className="absolute inset-0 overflow-hidden">

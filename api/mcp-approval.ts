@@ -5,6 +5,7 @@ import { applyCors, hasAcceptableOrigin } from './_lib/cors.js';
 import { cleanupFlightControlRuns, enabledMcpServers, flightControlsAdmin, loadEnabledFlightControls } from './_lib/flightControls.js';
 import { discoverMcpTools, executeMcpTool } from './_lib/mcpClient.js';
 import { mcpApprovalBodySchema, parseOrReject } from './_lib/validation.js';
+import { OSAII_CHAT_URL } from './_lib/apiSolution.js';
 
 interface ContinuationState {
   args: Record<string, unknown>;
@@ -40,6 +41,10 @@ async function completeWithModel(state: ContinuationState, messages: Array<Recor
     url = 'https://ai.eaon.dev/v1/chat/completions';
     apiKey = process.env.EAON_API_KEY || '';
     body = { model: state.model, messages, temperature: state.temperature, max_tokens: state.maxTokens, stream: false };
+  } else if (provider === 'osaii') {
+    url = OSAII_CHAT_URL;
+    apiKey = (process.env.OSAII_API_KEY || '').trim();
+    body = { model: state.model, messages, temperature: state.temperature, max_tokens: state.maxTokens, stream: false };
   } else if (provider === 'nvidia' || provider === 'nim') {
     url = 'https://integrate.api.nvidia.com/v1/chat/completions';
     apiKey = process.env.NVIDIA_API_KEY || process.env.NIM_API_KEY || '';
@@ -58,10 +63,10 @@ async function completeWithModel(state: ContinuationState, messages: Array<Recor
     body = { model: state.model, messages, temperature: state.temperature, max_tokens: state.maxTokens, stream: false };
   }
 
-  if (state.reasoningEffort) body.reasoning_effort = state.reasoningEffort;
+  if (state.reasoningEffort && provider !== 'osaii') body.reasoning_effort = state.reasoningEffort;
   const response = await fetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   if (!response.ok) throw new Error(`Model continuation failed (${response.status})`);

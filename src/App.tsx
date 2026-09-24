@@ -1,4 +1,8 @@
-import React, { Suspense, lazy, useEffect, useState, useMemo, useCallback } from 'react';
+import { BrandLogo as LegacyBrandLogo } from './components/brand/LegacyBrandLogo';
+import { ChatMode as LegacyChatMode } from './components/chat/LegacyChatMode';
+import { SettingsModal as LegacySettingsModal } from './components/settings/LegacySettingsModal';
+import { AppAtmosphere } from './components/shared/AppAtmosphere';
+import React, { useLayoutEffect, Suspense, lazy, useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { Routes, Route, useNavigate, useLocation, useParams, Navigate } from 'react-router-dom';
 import { ChatInput } from './components/chat/ChatInput';
 import { BrandLogo } from './components/brand/BrandLogo';
@@ -9,8 +13,20 @@ import { searchMusic, getLyrics, Track as LyricsTrack, LyricLine } from './servi
 import LyricsDisplay from './components/music/LyricsDisplay';
 import LyricsYouTubePlayer from './components/music/LyricsYouTubePlayer';
 import { LyricsMiniPlayer } from './components/music/LyricsMiniPlayer';
-import { Star, Users, Settings, Zap } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { Users, Settings, Zap, PanelRightOpen } from 'lucide-react';
+import { LEGACY_TOP_DELAY_MS, LEGACY_TOP_DURATION_MS } from './themes/legacyMotion';
+
+/* The same minds in light mode. Air takes the deep purple that light.css's
+   one-accent ramp lands on; Girlie and PRO keep their exact colours in
+   both modes (see the brand-hue note in light.css). */
+const personaLightAccents: Record<string, string> = { default: '88 28 135', girlie: '236 72 153', pro: '34 211 238' };
+/* The header action button's fill: the mind's hue at 20% behind the ink. */
+const personaBackgroundColors: Record<string, string> = {
+  default: 'rgba(139,0,255,0.2)',
+  girlie: 'rgba(199,21,133,0.2)',
+  pro: 'rgba(30,144,255,0.2)',
+};
+import { AnimatePresence, motion } from 'framer-motion';
 import { useChat } from './hooks/useChat';
 import { useAnonymousRateLimit } from './hooks/useAnonymousRateLimit';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -26,7 +42,8 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import { ChatMode } from './components/chat/ChatMode';
 import { StageMode } from './components/chat/StageMode';
 import { WelcomeModal } from './components/modals/WelcomeModal';
-import { AuthModal } from './components/auth/AuthModal';
+import { AuthModal as CurrentAuthModal } from './components/auth/AuthModal';
+import { AuthModal as LegacyAuthModal } from './components/auth/LegacyAuthModal';
 import { OnboardingModal } from './components/auth/OnboardingModal';
 import { GroupChatModal } from './components/groupchat/GroupChatModal';
 import {
@@ -37,22 +54,49 @@ import {
   toggleMessageReaction
 } from './services/groupChat/groupChatService';
 import { GroupChat } from './types/groupChat';
-import { ACCESS_TOKEN_REQUIRED, MAINTENANCE_MODE, PRO_HEAT_LEVELS, AI_PERSONAS } from './config/constants';
-import { ChatSession, getSupabaseSessions, getLocalSessions } from './services/chat/chatService';
+import { ACCESS_TOKEN_REQUIRED, MAINTENANCE_MODE, AI_PERSONAS } from './config/constants';
+import { ChatSession, chatService, isPersistable } from './services/chat/chatService';
+import { MaxModeButton } from './components/maxmode/MaxModeButton';
+import { MaxModePill } from './components/maxmode/MaxModePill';
+import { GlassPill } from './components/maxmode/glass';
+import { workspaceModeFor } from './services/workspace/harnessBridge';
+import { githubExchange } from './services/workspace/githubService';
+import type { MaxModeKind } from '../shared/maxMode';
+import { newId } from './utils/id';
 import { SEOHead } from './components/seo/SEOHead';
 import { RouteLoadingFallback } from './components/routing/RouteLoadingFallback';
+import { hasEnteredApp, markEnteredApp, type LandingHandoff } from './components/landing/entered';
+import { useAppViewport } from './hooks/useAppViewport';
 
+const LandingPage = lazy(() => import('./components/landing/LandingPage').then((module) => ({ default: module.LandingPage })));
 const HomePage = lazy(() => import('./components/home/HomePage').then((module) => ({ default: module.HomePage })));
 const AccountPage = lazy(() => import('./components/auth/AccountPage').then((module) => ({ default: module.AccountPage })));
+const LegacyChatHistoryPage = lazy(() => import('./components/chat/LegacyChatHistoryPage').then(module => ({ default: module.ChatHistoryPage })));
 const ChatHistoryPage = lazy(() => import('./components/chat/ChatHistoryPage').then((module) => ({ default: module.ChatHistoryPage })));
+
+/* The legacy shell (Settings → Interface) is the whole product as it was
+   before the glass shell: every page below has its earlier file kept whole
+   under a Legacy* name, chosen per route by the setting. They are copies, not
+   variants, so a fix to one shell never has to be reasoned about for the
+   other. */
+const ResetPasswordPage = lazy(() => import('./components/auth/ResetPasswordPage').then((module) => ({ default: module.ResetPasswordPage })));
+const LegacyAccountPage = lazy(() => import('./components/auth/LegacyAccountPage').then((module) => ({ default: module.AccountPage })));
+const LegacyMemoriesPage = lazy(() => import('./components/memories/LegacyMemoriesPage').then((module) => ({ default: module.MemoriesPage })));
+const LegacyNotesPage = lazy(() => import('./components/notes/LegacyNotesPage').then((module) => ({ default: module.NotesPage })));
+const LegacyHealthcarePage = lazy(() => import('./components/healthcare/LegacyHealthcarePage').then((module) => ({ default: module.HealthcarePage })));
+const LegacyAboutPage = lazy(() => import('./components/about/LegacyAboutPage').then(module => ({ default: module.AboutPage })));
 const AboutPage = lazy(() => import('./components/about/AboutPage').then((module) => ({ default: module.AboutPage })));
+const LegacyPersonasPage = lazy(() => import('./components/personas/LegacyPersonasPage').then(module => ({ default: module.PersonasPage })));
 const PersonasPage = lazy(() => import('./components/personas/PersonasPage').then((module) => ({ default: module.PersonasPage })));
+const LegacyFeaturesPage = lazy(() => import('./components/features/LegacyFeaturesPage').then(module => ({ default: module.FeaturesPage })));
 const FeaturesPage = lazy(() => import('./components/features/FeaturesPage').then((module) => ({ default: module.FeaturesPage })));
+const LegacyContactPage = lazy(() => import('./components/contact/LegacyContactPage').then(module => ({ default: module.ContactPage })));
 const ContactPage = lazy(() => import('./components/contact/ContactPage').then((module) => ({ default: module.ContactPage })));
 const PrivacyPage = lazy(() => import('./components/legal/PrivacyPage').then((module) => ({ default: module.PrivacyPage })));
 const TermsPage = lazy(() => import('./components/legal/TermsPage').then((module) => ({ default: module.TermsPage })));
 const AlbumPage = lazy(() => import('./components/album/AlbumPage').then((module) => ({ default: module.AlbumPage })));
 const MemoriesPage = lazy(() => import('./components/memories/MemoriesPage').then((module) => ({ default: module.MemoriesPage })));
+const LegacyHelpPage = lazy(() => import('./components/help/LegacyHelpPage').then(module => ({ default: module.HelpPage })));
 const HelpPage = lazy(() => import('./components/help/HelpPage').then((module) => ({ default: module.HelpPage })));
 const NotesPage = lazy(() => import('./components/notes/NotesPage').then((module) => ({ default: module.NotesPage })));
 const HealthcarePage = lazy(() => import('./components/healthcare/HealthcarePage').then((module) => ({ default: module.HealthcarePage })));
@@ -62,6 +106,9 @@ const CookBookPage = lazy(() => import('./components/lifestyle/CookBookPage').th
 const FashionPage = lazy(() => import('./components/lifestyle/FashionPage').then((module) => ({ default: module.FashionPage })));
 const ShoppingListPage = lazy(() => import('./components/lifestyle/ShoppingListPage').then((module) => ({ default: module.ShoppingListPage })));
 const PremiumCalendarPage = lazy(() => import('./components/lifestyle/PremiumCalendarPage').then((module) => ({ default: module.PremiumCalendarPage })));
+// The editor, terminal and preview only exist on /max; the main bundle must
+// not carry CodeMirror and xterm for everyone else.
+const WorkspacePanel = lazy(() => import('./components/maxmode/WorkspacePanel').then((module) => ({ default: module.WorkspacePanel })));
 const GroupSettingsPage = lazy(() => import('./components/groupchat/GroupSettingsPage').then((module) => ({ default: module.GroupSettingsPage })));
 
 // Chat by ID page component - defined OUTSIDE to prevent re-renders
@@ -79,13 +126,8 @@ function ChatByIdPage() {
       setIsLoading(true);
 
       try {
-        let sessions: ChatSession[];
-        if (user) {
-          sessions = await getSupabaseSessions(user.id);
-        } else {
-          sessions = getLocalSessions();
-        }
-
+        chatService.setUserId(user?.id ?? null);
+        const sessions = await chatService.getSessions();
         const found = sessions.find(s => s.id === id);
         setSession(found || null);
       } catch (error) {
@@ -97,6 +139,13 @@ function ChatByIdPage() {
 
     loadChat();
   }, [id, user]);
+
+  // Hand the chat to the main page once it is found. This used to call
+  // navigate('/') with no state during render, which loaded the session and
+  // then threw it away.
+  useEffect(() => {
+    if (session) navigate('/', { replace: true, state: { sessionToLoad: session } });
+  }, [session, navigate]);
 
   if (isLoading) {
     return (
@@ -124,7 +173,6 @@ function ChatByIdPage() {
     );
   }
 
-  navigate('/');
   return null;
 }
 
@@ -133,10 +181,36 @@ interface MainChatPageProps {
   groupChatId?: string;
   brandOverride?: BrandOverride;
   backgroundClass?: string;
+  /**
+   * Max Mode (shared/maxMode.ts): this page is the /max/:id route. The chat
+   * is the one loaded for that id — or a fresh PRO chat under that id — and
+   * the workspace panel sits beside it. Its own route rather than a mode of
+   * "/" because the Node runtime needs cross-origin isolation headers that
+   * would break the rest of the app (vercel.json).
+   */
+  maxModeRoute?: { sessionId: string; session: ChatSession | null; mode: MaxModeKind };
 }
 
-function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackgroundClass }: MainChatPageProps = {}) {
-  const { theme } = useTheme();
+/** A PRO chat that does not exist yet, so /max/:id can start one under that id. */
+function freshProSession(sessionId: string): ChatSession {
+  const now = new Date().toISOString();
+  return {
+    id: sessionId,
+    name: 'New Chat',
+    persona: 'pro',
+    messages: [{ id: 'initial', content: AI_PERSONAS.pro.initialMessage, isAI: true, hasAnimated: true, createdAt: now }],
+    createdAt: now,
+    lastModified: now,
+  };
+}
+
+function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackgroundClass, maxModeRoute }: MainChatPageProps = {}) {
+  const { theme, mode, uiStyle } = useTheme();
+  // Settings → Interface. The legacy shell has no atmosphere and no glass
+  // around the brand; the composer is the legacy bar in both.
+  const legacyUi = uiStyle === 'legacy';
+  const ChatBrand = legacyUi ? LegacyBrandLogo : BrandLogo;
+  const ChatTranscript = legacyUi ? LegacyChatMode : ChatMode;
   const { user, profile, loading: authLoading, profileLoading, needsOnboarding, updateLastPersona } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
@@ -149,7 +223,9 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
 
   // Check if we're loading a session from history BEFORE useChat initialization
   // This prevents the init effect from overwriting loaded messages
-  const sessionToLoad = location.state?.sessionToLoad as ChatSession | undefined;
+  const sessionToLoad = maxModeRoute
+    ? (maxModeRoute.session ?? freshProSession(maxModeRoute.sessionId))
+    : location.state?.sessionToLoad as ChatSession | undefined;
 
   // Check if navigating from healthcare page to auto-enable TM Healthcare mode
   const healthcareModeFromNav = location.state?.healthcareMode as boolean | undefined;
@@ -186,7 +262,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     isChatMode,
     isLoading,
     currentPersona,
-    currentProHeatLevel,
+    maxMode,
     currentEmotion,
     error,
     showAboutUs,
@@ -201,9 +277,11 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     // Actions
     handleSendMessage,
     retryMessage,
+    resumeWorkspaceTurn,
     stopGeneration,
     handlePersonaChange: handlePersonaChangeInternal,
-    setCurrentProHeatLevel,
+    setMaxMode,
+    persistNow,
     startNewChat,
     markMessageAsAnimated,
     dismissAboutUs,
@@ -227,12 +305,27 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     authLoading || profileLoading,
     // Pass session to load directly so it's available immediately on mount
     sessionToLoad ? {
-      messages: sessionToLoad.messages.filter(msg => msg.content && msg.content.trim() !== ''),
+      // The same rule the store uses to decide what to keep: a failed turn
+      // has empty content and its text in partialContent, and dropping it
+      // here lost the Retry row — and with it the resume — on every reload.
+      messages: sessionToLoad.messages.filter(isPersistable),
       id: sessionToLoad.id,
-      heat_level: sessionToLoad.heat_level
+      name: sessionToLoad.name,
+      maxMode: maxModeRoute?.mode ?? sessionToLoad.maxMode,
     } : null,
     flowStateActive
   );
+
+  // One delayed persona drives the complete top row. The brand and action
+  // therefore change on the same render and cannot drift onto separate clocks.
+  const [topPersona, setTopPersona] = useState(currentPersona);
+  useEffect(() => {
+    const timer = window.setTimeout(
+      () => setTopPersona(currentPersona),
+      legacyUi ? LEGACY_TOP_DELAY_MS : 0,
+    );
+    return () => window.clearTimeout(timer);
+  }, [currentPersona, legacyUi]);
 
   // Synced Lyrics Player Integration States
   const [lyricsTrack, setLyricsTrack] = useState<LyricsTrack | null>(null);
@@ -295,8 +388,11 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
   // Check if navigating from homepage with a playQuery
   const playQueryFromNav = location.state?.playQuery as string | undefined;
 
-  // Clear navigation state after loading session/healthcare mode/playQuery to prevent reload on refresh
+  // Clear navigation state after loading session/healthcare mode/playQuery to prevent reload on refresh.
+  // Not on /max: its session comes from the URL, and the URL has to stay so a
+  // reload lands on the same workspace.
   useEffect(() => {
+    if (maxModeRoute) return;
     if (!sessionToLoad && !healthcareModeFromNav && !playQueryFromNav) return;
     let cancelled = false;
     queueMicrotask(() => {
@@ -305,7 +401,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
       window.history.replaceState({}, '', '/');
     });
     return () => { cancelled = true; };
-  }, [playQueryFromNav, handleLyricsPlay, sessionToLoad, healthcareModeFromNav]);
+  }, [playQueryFromNav, handleLyricsPlay, sessionToLoad, healthcareModeFromNav, maxModeRoute]);
 
   const { isRateLimited, getRemainingMessages, isAnonymous } = useAnonymousRateLimit(currentPersona, isLoading);
 
@@ -326,7 +422,31 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
   }, [messages]);
 
   const [showGroupChatModal, setShowGroupChatModal] = useState(false);
-  const [isHeatLevelExpanded, setIsHeatLevelExpanded] = useState(false);
+  // Max Mode is its own document (see MainChatPageProps). Entering it from
+  // here is a full navigation, so the chat is written out first — the route
+  // loads it by id, and the debounced save may not have run yet.
+  const enterMaxMode = useCallback(async () => {
+    setMaxMode('auto');
+    try {
+      await persistNow();
+    } catch (error) {
+      console.error('Could not save the chat before opening Max Mode:', error instanceof Error ? error.message : error);
+    }
+    window.location.assign(`/max/${currentSessionId}`);
+  }, [setMaxMode, persistNow, currentSessionId]);
+
+  const exitMaxMode = useCallback(async () => {
+    try {
+      await persistNow();
+    } catch (error) {
+      console.error('Could not save the chat before leaving Max Mode:', error instanceof Error ? error.message : error);
+    }
+    window.location.assign(`/chat/${currentSessionId}`);
+  }, [persistNow, currentSessionId]);
+
+  // The workspace card can be collapsed. On small screens it and the chat
+  // take turns, so it starts closed there and open on a desktop.
+  const [workspaceOpen, setWorkspaceOpen] = useState(() => window.matchMedia('(min-width: 1024px)').matches);
   const [showWelcomeModal, setShowWelcomeModal] = useState(() => {
     if (!ACCESS_TOKEN_REQUIRED) return false;
     const accessGranted = localStorage.getItem('timeMachine_accessGranted');
@@ -406,39 +526,15 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     }
   }, [isGroupMode, groupChatId, isGroupParticipant, isCollaborative, joinCollaborativeChat]);
 
-  useEffect(() => {
-    const updateVH = () => {
-      const vh = window.innerHeight * 0.01;
-      document.documentElement.style.setProperty('--vh', `${vh}px`);
-    };
 
-    updateVH();
-    window.addEventListener('resize', updateVH);
-    return () => window.removeEventListener('resize', updateVH);
-  }, []);
-
-  // Memoize button styles to prevent recalculation
-  const personaBackgroundColors: Record<string, string> = useMemo(() => ({
-    default: 'rgba(139,0,255,0.2)',
-    girlie: 'rgba(199,21,133,0.2)',
-    pro: 'rgba(30,144,255,0.2)'
-  }), []);
-
+  // The header action buttons, as they were drawn before the shell was
+  // rebuilt: each mind's own hue at 20% behind the ink, with the label always
+  // on. The control on the right of the header is the same on a phone and a
+  // desktop, so nothing here is responsive.
   const buttonStyles = useMemo(() => ({
     bg: personaBackgroundColors[currentPersona] || personaBackgroundColors.default,
-    text: theme.text,
-  }), [currentPersona, theme.text, personaBackgroundColors]);
-
-  const heatLevelButtonStyles = useMemo(() => ({
-    border: isHeatLevelExpanded ? '1px solid rgba(34, 211, 238, 0.5)' : '1px solid rgba(34, 211, 238, 0.3)',
-    bg: isHeatLevelExpanded
-      ? 'linear-gradient(135deg, rgba(34, 211, 238, 0.3), rgb(var(--tm-ink-rgb) / 0.05))'
-      : 'linear-gradient(135deg, rgba(34, 211, 238, 0.15), rgb(var(--tm-ink-rgb) / 0.05))',
-    shadow: isHeatLevelExpanded
-      ? '0 0 20px rgba(34, 211, 238, 0.4), inset 0 1px 0 rgb(var(--tm-ink-rgb) / 0.15)'
-      : '0 0 12px rgba(34, 211, 238, 0.25), inset 0 1px 0 rgb(var(--tm-ink-rgb) / 0.15)',
-    text: isHeatLevelExpanded ? 'rgb(135,206,250)' : theme.text,
-  }), [isHeatLevelExpanded, theme.text]);
+    text: 'rgb(var(--tm-ink-rgb) / 0.92)',
+  }), [currentPersona]);
 
   const flowStateButtonStyles = useMemo(() => ({
     border: flowStateActive ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid rgba(168, 85, 247, 0.4)',
@@ -448,8 +544,27 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     shadow: flowStateActive
       ? '0 0 20px rgba(168, 85, 247, 0.4), inset 0 1px 0 rgb(var(--tm-ink-rgb) / 0.15)'
       : '0 0 15px rgba(168, 85, 247, 0.35), inset 0 1px 0 rgb(var(--tm-ink-rgb) / 0.15)',
-    text: flowStateActive ? 'rgb(216, 180, 254)' : theme.text,
-  }), [flowStateActive, theme.text]);
+    text: legacyUi
+      ? flowStateActive ? 'rgb(216, 180, 254)' : 'var(--color-gray-200)'
+      : flowStateActive ? 'rgb(var(--tm-accent-rgb, 216 180 254))' : 'rgb(var(--tm-ink-rgb) / 0.92)',
+  }), [flowStateActive, legacyUi]);
+
+  // Girlie's action uses the same legacy glass construction as Air and PRO:
+  // tinted lens, coloured rim, soft glow and the same 20px blur. Current
+  // keeps its existing treatment.
+  const girlieActionButtonStyles = useMemo(() => legacyUi ? ({
+    background: 'linear-gradient(135deg, rgba(236, 72, 153, 0.15), rgb(var(--tm-ink-rgb) / 0.05))',
+    color: 'var(--color-gray-200)',
+    border: '1px solid rgba(236, 72, 153, 0.3)',
+    boxShadow: '0 0 12px rgba(236, 72, 153, 0.25), inset 0 1px 0 rgb(var(--tm-ink-rgb) / 0.15)',
+    backdropFilter: 'blur(20px)',
+    WebkitBackdropFilter: 'blur(20px)',
+  }) : ({
+    background: buttonStyles.bg,
+    color: buttonStyles.text,
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
+  }), [buttonStyles, legacyUi]);
 
   const handleAccessGranted = useCallback(() => {
     setShowWelcomeModal(false);
@@ -530,9 +645,40 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
     setShowAuthModal(true);
   }, []);
 
+  // The landing page hands over either a first message to send or a request
+  // to open sign-in (components/landing/entered.ts). Once, on arrival: the
+  // ref guards re-renders, and the history entry is cleared the same way the
+  // other nav state above is so a reload does not send it twice.
+  const landingHandoff = location.state as LandingHandoff | null;
+  const handoffConsumedRef = useRef(false);
+  useEffect(() => {
+    if (maxModeRoute || handoffConsumedRef.current) return;
+    if (!landingHandoff?.initialPrompt && !landingHandoff?.openAuth) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      // Consumed only once it actually runs: StrictMode mounts twice, and the
+      // first mount's microtask is cancelled by its cleanup.
+      if (cancelled || handoffConsumedRef.current) return;
+      handoffConsumedRef.current = true;
+      if (landingHandoff.openAuth) handleOpenAuth();
+      if (landingHandoff.initialPrompt) void handleSendMessageWithRateLimit(landingHandoff.initialPrompt);
+      window.history.replaceState({}, '', '/');
+    });
+    return () => { cancelled = true; };
+  }, [landingHandoff, maxModeRoute, handleOpenAuth, handleSendMessageWithRateLimit]);
+
   const handleOpenAccount = useCallback(() => {
     navigate('/account');
   }, [navigate]);
+
+  // "New chat" from another page (the history page's compose button) arrives
+  // as router state, one-shot.
+  const newChatFromNav = (location.state as { newChat?: boolean } | null)?.newChat;
+  useEffect(() => {
+    if (!newChatFromNav) return;
+    startNewChat();
+    navigate(location.pathname, { replace: true, state: null });
+  }, [newChatFromNav, startNewChat, navigate, location.pathname]);
 
   const handleOpenHistory = useCallback(() => {
     navigate('/history');
@@ -577,20 +723,84 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
   const backgroundClass = customBackgroundClass
     ? customBackgroundClass
     : isHealthcareActive
-      ? 'bg-linear-to-t/srgb from-green-950 to-black to-50%'
+      ? legacyUi ? 'bg-linear-to-t/srgb from-green-950 to-black to-50%' : 'bg-canvas'
       : theme.background;
+  // Legacy backgrounds are Tailwind gradients, which CSS cannot interpolate.
+  // Keep the previous gradient in place while the next one is revealed from
+  // the bottom through a feathered mask. This makes persona changes feel like
+  // the new colour is rising through the page instead of flashing at once.
+  const shellBackgroundClass = legacyUi && !customBackgroundClass ? 'bg-black' : backgroundClass;
 
   return (
     <div
       id={brandOverride ? 'reveoule-theme' : undefined}
-      className={`min-h-screen ${backgroundClass} ${theme.text} relative overflow-hidden transition-all duration-700`}
-      style={{ minHeight: 'calc(var(--vh, 1vh) * 100)' }}
+      className={`${legacyUi ? 'tm-legacy-chat-shell' : 'tm-chat-shell'} min-h-screen ${shellBackgroundClass} ${theme.text} relative overflow-hidden`}
+      style={{
+        minHeight: 'calc(var(--vh, 1vh) * 100)',
+        // Light mode's inline accent follows the mind; dark keeps each
+        // style's own fallback hue, so the variable is left unset there.
+        ...(!legacyUi && mode === 'light' && !brandOverride ? { '--tm-accent-rgb': personaLightAccents[currentPersona] || personaLightAccents.default } : {}),
+      } as React.CSSProperties}
     >
-      <main className="relative h-screen flex flex-col" style={{ height: 'calc(var(--vh, 1vh) * 100)' }}>
-        <header className="fixed top-0 left-0 right-0 z-50 px-4 py-3 bg-transparent">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <BrandLogo
-              currentPersona={currentPersona}
+      {legacyUi && !customBackgroundClass && (
+        <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+          <AnimatePresence initial={false}>
+            <motion.div
+              key={backgroundClass}
+              className={`absolute inset-0 ${backgroundClass}`}
+              initial={{
+                maskPosition: '0% 0%',
+              }}
+              animate={{
+                maskPosition: '0% 100%',
+                transition: { duration: 1.45, ease: [0.65, 0, 0.35, 1] },
+              }}
+              exit={{
+                opacity: 0,
+                transition: { duration: 0.15, delay: 1.3 },
+              }}
+              style={{
+                WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, transparent 8.333%, rgba(0, 0, 0, 0.05) 16.667%, rgba(0, 0, 0, 0.12) 25%, rgba(0, 0, 0, 0.22) 33.333%, rgba(0, 0, 0, 0.35) 41.667%, rgba(0, 0, 0, 0.5) 50%, rgba(0, 0, 0, 0.65) 58.333%, rgba(0, 0, 0, 0.78) 66.667%, rgba(0, 0, 0, 0.88) 75%, rgba(0, 0, 0, 0.95) 83.333%, #000 91.667%, #000 100%)',
+                maskImage: 'linear-gradient(to bottom, transparent 0%, transparent 8.333%, rgba(0, 0, 0, 0.05) 16.667%, rgba(0, 0, 0, 0.12) 25%, rgba(0, 0, 0, 0.22) 33.333%, rgba(0, 0, 0, 0.35) 41.667%, rgba(0, 0, 0, 0.5) 50%, rgba(0, 0, 0, 0.65) 58.333%, rgba(0, 0, 0, 0.78) 66.667%, rgba(0, 0, 0, 0.88) 75%, rgba(0, 0, 0, 0.95) 83.333%, #000 91.667%, #000 100%)',
+                WebkitMaskSize: '100% 1200%',
+                maskSize: '100% 1200%',
+                WebkitMaskRepeat: 'no-repeat',
+                maskRepeat: 'no-repeat',
+                willChange: 'mask-position',
+              }}
+            />
+          </AnimatePresence>
+        </div>
+      )}
+      {/* Max Mode: chat on the left, workspace on the right. The transform
+          makes the column the containing block for the chat's own fixed
+          header and composer, so they stay inside it instead of spanning the
+          workspace too. */}
+      {!legacyUi && !brandOverride && !customBackgroundClass && <AppAtmosphere variant={isHealthcareActive ? 'healthcare' : undefined} />}
+      <div
+        className={maxModeRoute ? 'flex h-screen' : undefined}
+        style={maxModeRoute ? { height: 'calc(var(--vh, 1vh) * 100)' } : undefined}
+      >
+      <div
+        className={maxModeRoute ? `relative min-w-0 flex-1 h-full ${workspaceOpen ? 'hidden lg:block' : ''}` : undefined}
+        style={maxModeRoute ? { transform: 'translateZ(0)' } : undefined}
+      >
+      <div className="flex" style={{ height: 'calc(var(--vh, 1vh) * 100)' }}>
+      <main className="relative h-screen min-w-0 flex-1 flex flex-col" style={{ height: 'calc(var(--vh, 1vh) * 100)' }}>
+        {/* Independent floating controls leave the header open to the canvas. */}
+        <header
+          className={legacyUi
+            ? 'fixed top-0 left-0 right-0 z-50 px-4 py-3 bg-transparent'
+            : 'tm-chat-header fixed inset-x-0 top-5 z-50 px-4 sm:top-4 sm:px-6 lg:px-8'}
+        >
+          <div className={legacyUi ? "max-w-7xl mx-auto flex items-center justify-between" : "flex items-center justify-between gap-3"}>
+            <div className="flex min-w-0 items-center gap-3">
+            {/* The brand is the legacy header's bare, glowing wordmark in
+                both shells; its menu carries the minds and the app's few
+                other places. */}
+            <div className={legacyUi ? undefined : "tm-chat-brand tm-chat-brand-bare min-w-0"}>
+            <ChatBrand
+              currentPersona={legacyUi ? topPersona : currentPersona}
               onPersonaChange={handlePersonaChange}
               onLoadChat={loadChat}
               onStartNewChat={startNewChat}
@@ -599,7 +809,11 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
               onOpenHistory={handleOpenHistory}
               onOpenSettings={handleOpenSettings}
               brandOverride={brandOverride}
+              bare
+              accent={isHealthcareActive ? 'healthcare' : undefined}
             />
+            </div>
+            </div>
             <div className="flex items-center gap-2">
               {isAnonymous && (
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-xs text-white/50">
@@ -607,6 +821,27 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                 </div>
               )}
 
+              <div className="grid justify-items-end">
+              <AnimatePresence initial={false}>
+              <motion.div
+                key={isAnonymous ? 'anonymous-action' : topPersona}
+                className="col-start-1 row-start-1"
+                initial={legacyUi && !isAnonymous ? { opacity: 0, y: 3, filter: 'blur(4px)' } : false}
+                animate={{
+                  opacity: 1,
+                  y: 0,
+                  filter: 'blur(0px)',
+                  transition: legacyUi && !isAnonymous
+                    ? { duration: LEGACY_TOP_DURATION_MS / 1000, ease: [0.65, 0, 0.35, 1] }
+                    : { duration: 0.2 },
+                }}
+                exit={legacyUi && !isAnonymous ? {
+                  opacity: 0,
+                  y: -3,
+                  filter: 'blur(4px)',
+                  transition: { duration: LEGACY_TOP_DURATION_MS / 1000, ease: [0.65, 0, 0.35, 1] },
+                } : { opacity: 0, transition: { duration: 0.2 } }}
+              >
               {isAnonymous ? (
                 <motion.button
                   whileHover={{ scale: 1.05 }}
@@ -632,81 +867,16 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                   </svg>
                   <span style={{ fontSize: '14px', color: buttonStyles.text }}>Sign Up</span>
                 </motion.button>
-              ) : currentPersona === 'pro' ? (
-                <div className="relative">
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => setIsHeatLevelExpanded(!isHeatLevelExpanded)}
-                    style={{
-                      background: heatLevelButtonStyles.bg,
-                      color: heatLevelButtonStyles.text,
-                      border: heatLevelButtonStyles.border,
-                      boxShadow: heatLevelButtonStyles.shadow,
-                      borderRadius: '9999px',
-                      backdropFilter: 'blur(20px)',
-                      WebkitBackdropFilter: 'blur(20px)',
-                      outline: 'none',
-                      padding: '8px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      transition: 'all 0.3s ease',
-                    }}
-                    aria-label={isHeatLevelExpanded ? "Close Heat Level" : "Open Heat Level"}
-                  >
-                    <Star style={{ width: '16px', height: '16px', color: heatLevelButtonStyles.text }} />
-                    <span style={{ fontSize: '14px', color: heatLevelButtonStyles.text }}>
-                      Heat Level {currentProHeatLevel}
-                    </span>
-                  </motion.button>
-
-                  <AnimatePresence>
-                    {isHeatLevelExpanded && (
-                      <motion.div
-                        initial={{ opacity: 0, y: -10, scale: 0.95 }}
-                        animate={{ opacity: 1, y: 0, scale: 1 }}
-                        exit={{ opacity: 0, y: -10, scale: 0.95 }}
-                        transition={{ duration: 0.25, ease: 'easeOut' }}
-                        className="absolute top-full right-0 mt-3 w-72 bg-black/10 backdrop-blur-3xl rounded-3xl z-50 overflow-hidden border border-white/5"
-                        style={{
-                          background: 'linear-gradient(145deg, rgb(var(--tm-ink-rgb) / 0.03), rgb(var(--tm-ink-rgb) / 0.01))'
-                        }}
-                      >
-                        {Object.entries(PRO_HEAT_LEVELS).map(([level, config]) => (
-                          <motion.button
-                            key={level}
-                            whileHover={{
-                              scale: 1.03,
-                              background: 'linear-gradient(90deg, rgba(34,211,238,0.2) 0%, transparent 100%)'
-                            }}
-                            whileTap={{ scale: 0.97 }}
-                            onClick={() => {
-                              setCurrentProHeatLevel(parseInt(level));
-                              setIsHeatLevelExpanded(false);
-                            }}
-                            className={`w-full px-4 py-3 text-left transition-all duration-300
-                              ${currentProHeatLevel === parseInt(level) ? 'text-cyan-400' : theme.text}
-                              ${currentProHeatLevel === parseInt(level) ? 'bg-linear-to-r/srgb from-cyan-500/20 to-black/10' : 'bg-transparent'}
-                              flex flex-col gap-1 border-b border-white/5 last:border-b-0`}
-                            style={{
-                              background: currentProHeatLevel === parseInt(level) ?
-                                'linear-gradient(to right, rgba(34,211,238,0.2), rgb(var(--tm-paper-rgb) / 0.1))' :
-                                'transparent'
-                            }}
-                          >
-                            <div className="font-bold text-sm">{config.name}</div>
-                            <div className={`text-xs opacity-70 ${theme.text}`}>
-                              {config.description}
-                            </div>
-                          </motion.button>
-                        ))}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-              ) : currentPersona === 'default' ? (
-                // Flow State button for Air persona — liquid glass style
+              ) : topPersona === 'pro' ? (
+                <MaxModeButton
+                  legacy={legacyUi}
+                  active={!!maxModeRoute}
+                  textColor={legacyUi ? "var(--color-gray-200)" : "rgb(var(--tm-ink-rgb) / 0.92)"}
+                  onEnter={enterMaxMode}
+                  onExit={maxModeRoute ? exitMaxMode : undefined}
+                />
+              ) : topPersona === 'default' ? (
+                // Flow State button for Air — liquid glass style
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
@@ -726,6 +896,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                     gap: '8px',
                     transition: 'all 0.3s ease',
                   }}
+                  aria-pressed={flowStateActive}
                   aria-label={flowStateActive ? "Disable Flow State" : "Enable Flow State"}
                 >
                   <Zap style={{ width: '16px', height: '16px', color: flowStateButtonStyles.text, fill: flowStateActive ? flowStateButtonStyles.text : 'none' }} />
@@ -733,7 +904,7 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                     Flow State
                   </span>
                 </motion.button>
-              ) : currentPersona === 'girlie' && (
+              ) : topPersona === 'girlie' && (
                 isCollaborative && collaborativeId ? (
                   // Group Settings button when in collaborative mode
                   <motion.button
@@ -741,10 +912,8 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                     whileTap={{ scale: 0.95 }}
                     onClick={() => navigate(`/groupchat/${collaborativeId}/settings`)}
                     style={{
-                      background: buttonStyles.bg,
-                      color: buttonStyles.text,
+                      ...girlieActionButtonStyles,
                       borderRadius: '9999px',
-                      backdropFilter: 'blur(10px)',
                       outline: 'none',
                       padding: '8px 16px',
                       display: 'flex',
@@ -754,8 +923,8 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                     }}
                     aria-label="Group Settings"
                   >
-                    <Settings style={{ width: '16px', height: '16px', color: buttonStyles.text }} />
-                    <span style={{ fontSize: '14px', color: buttonStyles.text }}>Group Settings</span>
+                    <Settings style={{ width: '16px', height: '16px', color: girlieActionButtonStyles.color }} />
+                    <span style={{ fontSize: '14px', color: girlieActionButtonStyles.color }}>Group Settings</span>
                   </motion.button>
                 ) : (
                   // Create Group Chat button
@@ -764,10 +933,8 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                     whileTap={{ scale: 0.95 }}
                     onClick={() => setShowGroupChatModal(true)}
                     style={{
-                      background: buttonStyles.bg,
-                      color: buttonStyles.text,
+                      ...girlieActionButtonStyles,
                       borderRadius: '9999px',
-                      backdropFilter: 'blur(10px)',
                       outline: 'none',
                       padding: '8px 16px',
                       display: 'flex',
@@ -777,20 +944,25 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                     }}
                     aria-label="Open Group Chat"
                   >
-                    <Users style={{ width: '16px', height: '16px', color: buttonStyles.text }} />
-                    <span style={{ fontSize: '14px', color: buttonStyles.text }}>Group Chat</span>
+                    <Users style={{ width: '16px', height: '16px', color: girlieActionButtonStyles.color }} />
+                    <span style={{ fontSize: '14px', color: girlieActionButtonStyles.color }}>Group Chat</span>
                   </motion.button>
                 )
               )}
+              </motion.div>
+              </AnimatePresence>
+              </div>
             </div>
           </div>
         </header>
 
-        <MusicPlayer
-          currentPersona={currentPersona}
-          currentEmotion={currentEmotion}
-          isCenterStage={false}
-        />
+        {!maxModeRoute && (
+          <MusicPlayer
+            currentPersona={currentPersona}
+            currentEmotion={currentEmotion}
+            isCenterStage={false}
+          />
+        )}
 
         {youtubeMusic && (
           <YouTubePlayer
@@ -984,8 +1156,9 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
             <>
               {isLyricsMaximized && (lyricsTrack || lyricsIsLoading || lyricsError) ? (
                 <div className="flex-1 flex flex-col items-center justify-center p-4 relative min-h-[60vh] w-full">
-                  {/* Minimize Button */}
-                  <div className="absolute top-4 right-4 z-40">
+                  {/* Minimize: below the fixed header, so it never sits
+                      under Flow State. */}
+                  <div className="absolute right-4 z-40" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 72px)' }}>
                     <motion.button
                       whileHover={{ scale: 1.05 }}
                       whileTap={{ scale: 0.95 }}
@@ -1072,9 +1245,10 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
                     </div>
                   )}
                 >
-                <ChatMode
+                <ChatTranscript
                   messages={messages}
                   currentPersona={currentPersona}
+                  accent={isHealthcareActive ? 'healthcare' : undefined}
                   onMessageAnimated={markMessageAsAnimated}
                   error={error}
                   streamingMessageId={streamingMessageId}
@@ -1109,8 +1283,28 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
           )}
         </div>
 
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-transparent">
-          <div className="max-w-4xl mx-auto">
+        {/* The dock. The transcript scrolls under it and fades into the
+            ground before it reaches the glass; the wrapper passes clicks
+            through so only the composer itself is interactive. */}
+        <div
+          className={legacyUi
+            ? 'pointer-events-none fixed inset-x-0 z-40 p-4'
+            : 'tm-chat-dock pointer-events-none fixed inset-x-0 z-40 px-3 pt-12 sm:px-6'}
+          // --tm-keyboard is the soft keyboard's height on the browsers that
+          // leave the layout viewport alone (see the --vh effect); 0 elsewhere.
+          style={{ bottom: 'var(--tm-keyboard, 0px)' }}
+        >
+          <div className="pointer-events-auto mx-auto max-w-4xl">
+            {maxModeRoute && (
+              <div className="mb-2 flex items-center justify-between px-1">
+                <MaxModePill mode={maxMode ?? 'auto'} onSelect={setMaxMode} />
+                {!workspaceOpen && (
+                  <GlassPill onClick={() => setWorkspaceOpen(true)} className="h-8 px-3 text-[13px]" title="Show the workspace">
+                    <PanelRightOpen className="w-3.5 h-3.5" /> Workspace
+                  </GlassPill>
+                )}
+              </div>
+            )}
             <ChatInput
               onSendMessage={handleSendMessageWithRateLimit}
               isLoading={isLoading}
@@ -1132,11 +1326,19 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
           currentPersona={currentPersona}
         />
 
-        <AuthModal
-          isOpen={showAuthModal}
-          onClose={() => setShowAuthModal(false)}
-          message={authModalMessage}
-        />
+        {legacyUi ? (
+          <LegacyAuthModal
+            isOpen={showAuthModal}
+            onClose={() => setShowAuthModal(false)}
+            message={authModalMessage}
+          />
+        ) : (
+          <CurrentAuthModal
+            isOpen={showAuthModal}
+            onClose={() => setShowAuthModal(false)}
+            message={authModalMessage}
+          />
+        )}
 
         <OnboardingModal
           isOpen={showOnboarding}
@@ -1152,8 +1354,111 @@ function MainChatPage({ groupChatId, brandOverride, backgroundClass: customBackg
           onGroupChatCreated={handleGroupChatCreated}
         />
       </main>
+      </div>
+      </div>
+      {maxModeRoute && (
+        <Suspense fallback={<div className={`${workspaceOpen ? 'flex' : 'hidden'} w-full lg:w-[720px] h-full items-center justify-center`}><RouteLoadingFallback /></div>}>
+          <WorkspacePanel
+            sessionId={currentSessionId}
+            isGenerating={isLoading}
+            onResume={resumeWorkspaceTurn}
+            className={workspaceOpen ? 'block' : 'hidden'}
+            onCollapse={() => setWorkspaceOpen(false)}
+          />
+        </Suspense>
+      )}
+      </div>
     </div>
   );
+}
+
+/**
+ * /github/callback — where the GitHub App sends the user back.
+ *
+ * The code is handed to the server with the user's JWT, which is what ties
+ * the connection to this account (api/_lib/github.ts). Then a full
+ * navigation back to the workspace the flow started from: /max is its own
+ * document, so a client-side navigate would land without its headers.
+ */
+function GithubCallbackPage() {
+  const { user, loading: authLoading } = useAuth();
+  const { theme } = useTheme();
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const code = params.get('code');
+  const state = params.get('state');
+  const [exchangeError, setExchangeError] = useState<string | null>(null);
+  // Derived, not set in the effect: what is missing is known from the URL
+  // and the session before anything runs.
+  const error = !code || !state
+    ? 'GitHub did not send a code back. Start the connection again.'
+    : !authLoading && !user
+      ? 'Sign in first, then connect GitHub again.'
+      : exchangeError;
+
+  useEffect(() => {
+    if (authLoading || !user || !code || !state) return;
+    githubExchange(code, state)
+      .then(result => { window.location.replace(`${result.returnTo}${result.returnTo.includes('?') ? '&' : '?'}github=connected`); })
+      .catch((cause: unknown) => setExchangeError(cause instanceof Error ? cause.message : 'The GitHub connection could not be completed.'));
+  }, [authLoading, user, code, state]);
+
+  return (
+    <div className={`min-h-screen ${theme.background} flex items-center justify-center p-4`}>
+      {error ? (
+        <div className="text-center max-w-sm">
+          <p className="text-white/70 mb-4">{error}</p>
+          <a href="/max" className="px-6 py-3 rounded-xl bg-cyan-500/20 border border-cyan-500/30 text-cyan-100 inline-block">Back to Max Mode</a>
+        </div>
+      ) : (
+        <div className="flex items-center gap-3 text-white/60">
+          <div className="w-6 h-6 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
+          Connecting GitHub…
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * /max/:id — Max Mode's own document (see MainChatPageProps.maxModeRoute).
+ *
+ * Loads the chat for the id through ChatService, then hands MainChatPage the
+ * session and the mode the workspace was left in. An id nobody has saved yet
+ * is a new PRO chat, which is how "Max Mode" on a fresh chat gets here.
+ */
+function MaxModePage() {
+  const { id } = useParams<{ id: string }>();
+  const { user, loading: authLoading } = useAuth();
+  const { theme } = useTheme();
+  const [loaded, setLoaded] = useState<{ session: ChatSession | null; mode: MaxModeKind } | null>(null);
+
+  useEffect(() => {
+    if (!id || authLoading) return;
+    let cancelled = false;
+    (async () => {
+      let session: ChatSession | null = null;
+      try {
+        chatService.setUserId(user?.id ?? null);
+        session = (await chatService.getSessions()).find(candidate => candidate.id === id) ?? null;
+      } catch (error) {
+        console.error('Could not load the chat for Max Mode:', error instanceof Error ? error.message : error);
+      }
+      const mode = (await workspaceModeFor(id)) ?? session?.maxMode ?? 'auto';
+      if (!cancelled) setLoaded({ session, mode });
+    })();
+    return () => { cancelled = true; };
+  }, [id, user?.id, authLoading]);
+
+  if (!id) return <Navigate to={`/max/${newId()}`} replace />;
+  if (!loaded) {
+    return (
+      <div className={`min-h-screen ${theme.background} flex items-center justify-center`}>
+        <div className="w-10 h-10 border-2 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin" />
+      </div>
+    );
+  }
+  return <MainChatPage maxModeRoute={{ sessionId: id, session: loaded.session, mode: loaded.mode }} />;
 }
 
 // Settings opens as a glass modal over the current page rather than as a
@@ -1167,10 +1472,50 @@ function SettingsRedirect() {
   return <Navigate to="/" replace />;
 }
 
+// "/" is the product for anyone signed in and for anyone who has already
+// stepped into it; the landing page only for a signed-out first visit. In-app
+// navigation to "/" always carries router state (a session, a mode, a
+// handoff), so it counts as an entry too — see components/landing/entered.ts.
+function RootRoute() {
+  const { user } = useAuth();
+  const { uiStyle } = useTheme();
+  const location = useLocation();
+  const showLanding = uiStyle !== 'legacy' && !user && !location.state && !hasEnteredApp();
+  useEffect(() => {
+    if (!showLanding) markEnteredApp();
+  }, [showLanding]);
+  if (showLanding) {
+    return <><SEOHead /><LandingPage /></>;
+  }
+  return <><SEOHead /><MainChatPage /></>;
+}
+
+/** The routes that are the marketing site rather than the product. */
+const MARKETING_PATHS = new Set(['/welcome', '/features', '/personas', '/about', '/help', '/contact']);
+
 function AppContent() {
-  const { theme } = useTheme();
+  const { user } = useAuth();
+  const { theme, uiStyle } = useTheme();
+  const legacyUi = uiStyle === 'legacy';
   const navigate = useNavigate();
+  const location = useLocation();
+  const HistoryPage = legacyUi ? LegacyChatHistoryPage : ChatHistoryPage;
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Which scale block index.css applies: the app's or the marketing site's.
+  // Both are 100% today; the attribute stays so the two can be tuned apart
+  // again. Decided here, before paint, so a route change never flashes. The
+  // root route counts as marketing only while it would show the landing page
+  // (see RootRoute).
+  const marketing = !legacyUi && (MARKETING_PATHS.has(location.pathname)
+    || (location.pathname === '/' && !user && !location.state && !hasEnteredApp()));
+  useLayoutEffect(() => {
+    document.documentElement.dataset.tmScale = marketing ? 'marketing' : 'app';
+    // The shared viewport measurement divides by the scale, which has
+    // just changed, so measure again.
+    window.dispatchEvent(new Event('resize'));
+  }, [marketing]);
+  useAppViewport(location.key, !marketing);
   const settingsModal = useMemo(() => ({
     isSettingsOpen,
     openSettings: () => setIsSettingsOpen(true),
@@ -1179,10 +1524,11 @@ function AppContent() {
 
   return (
     <SettingsModalContext.Provider value={settingsModal}>
-    <SettingsModal isOpen={isSettingsOpen} onClose={settingsModal.closeSettings} />
+    {legacyUi ? <LegacySettingsModal isOpen={isSettingsOpen} onClose={settingsModal.closeSettings} /> : <SettingsModal isOpen={isSettingsOpen} onClose={settingsModal.closeSettings} />}
     <Suspense fallback={<RouteLoadingFallback />}>
       <Routes>
-      <Route path="/" element={<><SEOHead /><MainChatPage /></>} />
+      <Route path="/" element={<RootRoute />} />
+      <Route path="/welcome" element={<><SEOHead title="Welcome" description="TimeMachine Chat — one chat with three AI minds, a coding agent in Max Mode, and nothing about you for sale. Free to try." path="/welcome" /><LandingPage /></>} />
       <Route path="/reveoule" element={
         <>
           <SEOHead title="Rêveoulé" description="Beauty products collab" path="/reveoule" noIndex />
@@ -1199,32 +1545,44 @@ function AppContent() {
       } />
       <Route path="/home" element={<><SEOHead title="Home" description="TimeMachine — the everything app. Chat, Canvas, Education, Healthcare, Shopping, and more." path="/home" /><HomePage /></>} />
       <Route path="/account" element={
-        <div className={`min-h-screen ${theme.background} ${theme.text} relative overflow-hidden`}>
-          <SEOHead title="Account" description="Manage your TimeMachine Chat account settings and profile." path="/account" noIndex />
-          <AccountPage onBack={() => navigate('/')} />
-        </div>
+        legacyUi ? (
+          <div className={`min-h-screen ${theme.background} ${theme.text} relative overflow-hidden`}>
+            <SEOHead title="Account" description="Manage your TimeMachine Chat account settings and profile." path="/account" noIndex />
+            <LegacyAccountPage onBack={() => navigate('/')} />
+          </div>
+        ) : (
+          <>
+            <SEOHead title="Account" description="Manage your TimeMachine Chat account settings and profile." path="/account" noIndex />
+            <AccountPage />
+          </>
+        )
+      } />
+      <Route path="/reset-password" element={
+        <>
+          <SEOHead title="Reset password" description="Set a new password for your TimeMachine ID." path="/reset-password" noIndex />
+          <ResetPasswordPage />
+        </>
       } />
       <Route path="/history" element={
         <>
           <SEOHead title="Chat History" description="View and continue your previous TimeMachine Chat conversations." path="/history" noIndex />
-          <ChatHistoryPage onLoadChat={(session) => {
-            // Pass session via navigation state so MainChatPage can load it
+          <HistoryPage onLoadChat={(session) => {
             navigate('/', { state: { sessionToLoad: session } });
           }} />
         </>
       } />
       <Route path="/settings" element={<SettingsRedirect />} />
-      <Route path="/about" element={<><SEOHead title="About" description="Learn about TimeMachine — the super app bringing AI personas, privacy-first design, and intelligent tools into one chat interface. Built by TimeMachine Mafia." path="/about" /><AboutPage /></>} />
-      <Route path="/personas" element={<><SEOHead title="Personas" description="Meet the TimeMachine AI personas — TimeMachine Air for everyday speed, TimeMachine Girlie for vibe-check conversations, and TimeMachine PRO for advanced intelligence." path="/personas" /><PersonasPage /></>} />
-      <Route path="/features" element={<><SEOHead title="Features" description="Explore TimeMachine features — Contour command palette with 30+ tools, group chat, TM Healthcare, image generation, music streaming, memory system, voice input, and more." path="/features" /><FeaturesPage /></>} />
-      <Route path="/contact" element={<><SEOHead title="Contact" description="Get in touch with the TimeMachine team for support, feedback, or collaboration." path="/contact" /><ContactPage /></>} />
+      <Route path="/about" element={<><SEOHead title="About" description="Learn about TimeMachine — the super app bringing AI personas, privacy-first design, and intelligent tools into one chat interface. Built by TimeMachine Mafia." path="/about" />{legacyUi ? <LegacyAboutPage /> : <AboutPage />}</>} />
+      <Route path="/personas" element={<><SEOHead title="Personas" description="Meet the TimeMachine AI personas — TimeMachine Air for everyday speed, TimeMachine Girlie for vibe-check conversations, and TimeMachine PRO for advanced intelligence." path="/personas" />{legacyUi ? <LegacyPersonasPage /> : <PersonasPage />}</>} />
+      <Route path="/features" element={<><SEOHead title="Features" description="Explore TimeMachine features — Contour command palette with 30+ tools, group chat, TM Healthcare, image generation, music streaming, memory system, voice input, and more." path="/features" />{legacyUi ? <LegacyFeaturesPage /> : <FeaturesPage />}</>} />
+      <Route path="/contact" element={<><SEOHead title="Contact" description="Get in touch with the TimeMachine team for support, feedback, or collaboration." path="/contact" />{legacyUi ? <LegacyContactPage /> : <ContactPage />}</>} />
       <Route path="/privacy" element={<><SEOHead title="Privacy Policy" description="How TimeMachine Chat collects, uses, and protects your data — including which third-party AI providers receive your prompts." path="/privacy" /><PrivacyPage /></>} />
       <Route path="/terms" element={<><SEOHead title="Terms of Service" description="The terms governing your use of TimeMachine Chat." path="/terms" /><TermsPage /></>} />
       <Route path="/album" element={<><SEOHead title="Album" path="/album" noIndex /><AlbumPage /></>} />
-      <Route path="/memories" element={<><SEOHead title="Memories" path="/memories" noIndex /><MemoriesPage /></>} />
-      <Route path="/help" element={<><SEOHead title="Help" description="Get help with TimeMachine — learn about AI personas, group chats, image generation, and all features." path="/help" /><HelpPage /></>} />
-      <Route path="/notes" element={<><SEOHead title="Notes" description="Capture your thoughts with TimeMachine Notes — a powerful Notion-like editor built right into TimeMachine." path="/notes" /><NotesPage /></>} />
-      <Route path="/healthcare" element={<><SEOHead title="Healthcare" description="Search medicines, brands, generics, and drug information — including dosage, side effects, and indications. Powered by TimeMachine Healthcare." path="/healthcare" /><HealthcarePage /></>} />
+      <Route path="/memories" element={<><SEOHead title="Memories" path="/memories" noIndex />{legacyUi ? <LegacyMemoriesPage /> : <MemoriesPage />}</>} />
+      <Route path="/help" element={<><SEOHead title="Help" description="Get help with TimeMachine — learn about AI personas, group chats, image generation, and all features." path="/help" />{legacyUi ? <LegacyHelpPage /> : <HelpPage />}</>} />
+      <Route path="/notes" element={<><SEOHead title="Notes" description="Capture your thoughts with TimeMachine Notes — a powerful Notion-like editor built right into TimeMachine." path="/notes" />{legacyUi ? <LegacyNotesPage /> : <NotesPage />}</>} />
+      <Route path="/healthcare" element={<><SEOHead title="Healthcare" description="Search medicines, brands, generics, and drug information — including dosage, side effects, and indications. Powered by TimeMachine Healthcare." path="/healthcare" />{legacyUi ? <LegacyHealthcarePage /> : <HealthcarePage />}</>} />
       <Route path="/shop" element={<><SEOHead title="Shop" description="Physical goods from the TimeMachine universe. Apparel, accessories, and more." path="/shop" /><ShopPage /></>} />
       <Route path="/lifestyle" element={<><SEOHead title="Lifestyle" description="Everyday essentials — calendar, shopping list, and expense tracker. All in one place with TimeMachine." path="/lifestyle" /><LifestyleLayout /></>}>
         <Route index element={<Navigate to="cookbook" replace />} />
@@ -1234,6 +1592,9 @@ function AppContent() {
         <Route path="calendar" element={<><SEOHead title="Calendar" path="/lifestyle/calendar" /><PremiumCalendarPage /></>} />
       </Route>
       <Route path="/chat/:id" element={<><SEOHead title="Chat" noIndex /><ChatByIdPage /></>} />
+      <Route path="/github/callback" element={<><SEOHead title="Connecting GitHub" noIndex /><GithubCallbackPage /></>} />
+      <Route path="/max" element={<><SEOHead title="Max Mode" noIndex /><MaxModePage /></>} />
+      <Route path="/max/:id" element={<><SEOHead title="Max Mode" noIndex /><MaxModePage /></>} />
       <Route path="/groupchat/:id" element={<><SEOHead title="Group Chat" noIndex /><GroupChatWrapper /></>} />
       <Route path="/groupchat/:id/settings" element={<><SEOHead title="Group Settings" noIndex /><GroupSettingsPage /></>} />
       <Route path="*" element={<><SEOHead title="Page not found" description="This TimeMachine page doesn't exist." noIndex /><NotFoundPage /></>} />

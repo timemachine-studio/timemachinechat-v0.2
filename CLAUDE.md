@@ -118,9 +118,54 @@ model calls notes_search
 - Server-executable app tools (`healthcare_search`) are ordinary tools in
   `api/_lib/tools.ts`. The split is about where the data is, not which app it is.
 
+### Max Mode — PRO as a coding harness
+
+Where Heat Level used to be on the PRO header there is a **Max Mode** toggle
+with three modes: **Plan** (read-only), **Edit** (reads and writes, never
+runs), **Auto** (the full loop: edit, run, preview, fix). Contract in
+`shared/maxMode.ts`; prompt in `api/_lib/maxModePrompt.ts`.
+
+```
+/max/:sessionId            its own document — COOP/COEP headers (vercel.json,
+                           vite.config.ts) so WebContainers can boot. Entering
+                           and leaving is a full navigation, on purpose.
+src/services/workspace/
+  workspaceStore.ts        IndexedDB, one workspace per chat session
+  workspaceTools.ts        executes list/read/write/edit/delete/grep/run/preview/PR
+  nodeRuntime.ts           WebContainer: store → container before a command,
+                           container → store after it (node_modules never syncs)
+  previewController.ts     srcdoc preview with console capture, or a dev-server URL
+  githubService.ts         clone (streamed NDJSON) and push via /api/mcp-servers?github=
+  harnessBridge.ts         what useChat hands aiProxyService for a Max Mode turn
+src/components/maxmode/    the panel: file tree, CodeMirror, preview, xterm, GitHub
+api/_lib/github.ts         GitHub App tokens (encrypted like MCP creds), tarball
+                           clone, Git Data API push + PR
+```
+
+- The workspace tools are **device tools** on the same bridge; the mode gate
+  is enforced at selection, server dispatch, and browser execution (`MAX_MODE_TOOLS`). `selectMaxModeToolSet` is a closed set: workspace tools, Python (Auto
+  only), `web_search`, `web_fetch`. No notes, no chats, no `find_tools`.
+- Max Mode turns are served by `/api/ai-proxy`, **not Trigger** — a coding
+  turn is dozens of legs and each Trigger job re-sends the transcript.
+  Budgets: `MAX_MODE_ROUND_BUDGET` (12/24/40), hard stop 48, 40k chars per
+  result, 160k-char transcript.
+- Each tool call is a card in the transcript, placed by a marker the bridge
+  writes into the content (`HARNESS_ACTION_MARKER` in `src/types/chat.ts`).
+  `stripHarnessMarkers` before sending content anywhere the user does not see.
+- Harness changes and known limits are tracked in `docs/agent/max-mode-harness.md` (MX.7–MX.12). Agent PR requests require approval of an exact publication snapshot; GitHub pushes require the expected remote commit.
+- `run_command` needs `crossOriginIsolated`; the client declares `'node'` only
+  when it has it, so Safari is never offered the tool. Do not add the
+  isolation headers to any other route — they break YouTube and third-party
+  frames.
+- GitHub rides on `api/mcp-servers.ts` (`?github=<action>`) because the
+  deployment is at Vercel's 12-Function limit (`tests/api/deployableSurface.test.ts`).
+  Register the App per `.env.example`; callback is `/github/callback` in the SPA.
+
 ### Providers
 
-Six are wired: `nvidia` (default), `groq`, `cerebras`, `pollinations`, `eaon`, `secretstoai`. Each has its own near-duplicate `fetch` block in `ai-proxy.ts` — around six of them. Adding a provider currently means touching all the call sites. Collapsing these into one adapter is a known refactor (`production-check.md` 3.5).
+The showcase switch is `API_SOLUTION` in `api/_lib/apiSolution.ts` (re-exported at the top of `ai-proxy.ts`). It defaults to `nuclear`: Air and Girlie use OSAII Poolside XS, PRO uses OSAII MiMo Pro, and all three share the configured MiMo Flash → Gemini Flash Lite → Nemotron fallbacks. `API_SOLUTION=production` restores the prior routes. The switch also covers Notes AI, chat titles, and PRO's queued task. OSAII calls are server-side; `OSAII_API_KEY` is optional but raises the fair-use limits. PRO's task needs the key separately in Trigger.dev. Without it, all anonymous calls from a deployment share its outbound IP limits.
+
+The existing provider adapters remain for production: `nvidia`, `groq`, `cerebras`, `pollinations`, `eaon`, and `secretstoai`. Collapsing their near-duplicate fetch blocks is a separate refactor (`production-check.md` 3.5).
 
 How images reach the model is decided per hop, in `api/_lib/vision.ts`. A model
 that takes image parts gets the image itself (`vision: 'native'`); the OCR
@@ -135,7 +180,7 @@ a hard 400, an unnecessary OCR is only a worse answer.
 
 Which provider a run uses is decided in exactly one place: `resolveRunProvider(persona, personaConfig, flowState)` in `ai-proxy.ts`. The spend-ceiling check and the actual dispatch both read from it — don't reintroduce a second derivation, or the ceiling will bill a provider the run never touched.
 
-**There are three personas: `default` (TimeMachine Air), `girlie`, and `pro`.** The `chatgpt` / `gemini` / `claude` / `grok` / `deepseek` personas were removed in full — see `production-check.md` 0.9. They routed to Pollinations while presenting other companies' marks, and their system prompts told the model to claim it *was* that company's product. Do not add them back.
+**There are three personas: `default` (TimeMachine Air), `girlie`, and `pro`.** PRO has one system prompt; Heat Levels were removed on 2026-09-12 in favour of Max Mode (above) — do not add them back. The `chatgpt` / `gemini` / `claude` / `grok` / `deepseek` personas were removed in full — see `production-check.md` 0.9. They routed to Pollinations while presenting other companies' marks, and their system prompts told the model to claim it *was* that company's product. Do not add them back.
 
 ## Environment variables
 
@@ -144,10 +189,12 @@ Client (`VITE_`-prefixed — **these are compiled into the public bundle**):
 - `VITE_MAINTENANCE_MODE`, `VITE_ACCESS_TOKEN_REQUIRED`, `VITE_BETA_ACCESS_TOKEN`
 
 Server (never `VITE_`-prefixed):
+- `API_SOLUTION` (`nuclear` by default, `production` for the prior routes) and optional `OSAII_API_KEY` (set in Vercel and Trigger.dev for keyed limits)
 - `NVIDIA_API_KEY` (or `NIM_API_KEY`), `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `POLLINATIONS_API_KEY`, `EAON_API_KEY`, `SECRETSTOAI_API_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY` — **required.** `rate_limits` is RLS-locked to the service role and `checkRateLimit` fails closed, so without this key every request 503s. `ai-proxy.ts` logs a loud error at boot when it is missing.
 - `ALLOWED_ORIGINS` — comma-separated CORS allowlist. Same-origin requests are allowed implicitly, so an unset value warns rather than breaking the app.
 - `ANON_TRIAL_SECRET` — HMACs the anonymous-trial device cookie. Unset means IP-only trial counting.
+- `GITHUB_APP_SLUG`, `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` — Max Mode's GitHub App; needs `MCP_CREDENTIAL_KEY` too. Unset means the GitHub panel says so; the rest of Max Mode works.
 - `ANON_DEFAULT_PERSONA_LIMIT` (default 3) and `PROVIDER_DAILY_CEILING` (0 disables the ceiling)
 
 **Never add a secret behind a `VITE_` prefix.** `src/config/constants.ts:7-9` currently exports `VITE_GROQ_API_KEY` / `VITE_CEREBRAS_API_KEY` / `VITE_NVIDIA_API_KEY` — these are unused and slated for deletion. Do not start using them.
@@ -189,15 +236,15 @@ Server (never `VITE_`-prefixed):
 
 What this means for new code:
 - **Do not add new writes of conversation content to Supabase.** `chat_sessions` and `chat_messages` are being removed.
-- Route all storage through `ChatService`. Several components currently bypass it and import the Supabase functions directly (`ChatHistoryPage`, `ChatHistoryModal`, `App.tsx`) — don't add more.
-- The store is becoming IndexedDB, not `localStorage`. Don't build on the `chatSessions` blob.
+- Route all personal chat storage through `ChatService`; legacy history pages now use the same device repository.
+- The primary store is IndexedDB, not the legacy `localStorage` `chatSessions` blob.
 - **A local-only store makes silent write failures unrecoverable.** There is no cloud copy. Never `catch` a storage error and only `console.error` it.
 
-**Today, signed-in chats still go to Supabase.** `ChatService.saveSession` routes signed-in users to `saveSupabaseSession` and only anonymous users to `localStorage`. The device-only store is the *destination*, not the current state — verify before writing anything that depends on it.
+**Today, signed-in personal chats are device-only.** `ChatService` uses an account-isolated IndexedDB workspace and fails closed when IndexedDB is unavailable. Legacy cloud rows are read once for migration and retained for recovery, but the app no longer writes personal chats there. Guest mode alone retains a legacy `localStorage` fallback when IndexedDB is unavailable.
 
 Two things to keep straight when writing user-facing copy:
 - Local storage of *history* does not make a conversation private — every turn is still sent to a third-party provider to generate the reply. "We don't store your chats" is true; "your messages never leave your device" is not. See LS.1.
-- **The signup form currently promises "Your chats are stored safely in your device only."** That claim is not true until Gate LS ships. It is tracked as a launch blocker in LS.3 — do not ship to production before it is true.
+- The signup promise concerns personal chat history. Group chats remain cloud-backed, and every AI turn still leaves the device for inference; privacy copy should make both boundaries clear.
 
 ## Security rules for this codebase
 

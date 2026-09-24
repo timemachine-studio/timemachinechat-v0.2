@@ -1,10 +1,10 @@
+import { popupExit, scrimExit } from '../../utils/popupMotion';
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Mail,
   Camera,
-  ArrowLeft,
   LogOut,
   Crown,
   MessageSquare,
@@ -26,11 +26,9 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { supabase, uploadImage } from '../../lib/supabase';
 import { MemoriesModal } from './MemoriesModal';
+import { AppShell } from '../shared/AppShell';
 import { ImagesModal } from './ImagesModal';
 
-interface AccountPageProps {
-  onBack: () => void;
-}
 
 // TimeMachine Logo for default avatar
 const TimeMachineLogo = () => (
@@ -54,8 +52,7 @@ function StatCard({ icon, label, value, onClick }: {
       whileHover={{ scale: 1.02, y: -2 }}
       whileTap={{ scale: 0.98 }}
       onClick={onClick}
-      className="relative overflow-hidden rounded-2xl p-4 text-left w-full group"
-      style={{ background: 'rgb(var(--tm-ink-rgb) / 0.05)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', border: '1px solid rgb(var(--tm-ink-rgb) / 0.1)', boxShadow: 'inset 0 1px 0 rgb(var(--tm-edge-rgb) / 0.1)' }}
+      className="tm-glass tm-glass-pill tm-press relative overflow-hidden rounded-2xl p-4 text-left w-full group"
     >
       <div className="relative flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -68,7 +65,7 @@ function StatCard({ icon, label, value, onClick }: {
   );
 }
 
-export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
+export const AccountPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, profile, updateProfile, signOut, changePassword } = useAuth();
   const [nickname, setNickname] = useState(profile?.nickname || '');
@@ -271,53 +268,24 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
   };
 
   return (
-    <div
-      className="h-screen overflow-hidden flex flex-col"
-      style={{
-        background: 'var(--tm-page-bg)'
-      }}
+    <AppShell
+      title="Account"
+      measure="narrow"
+      actions={profile?.is_pro ? (
+        <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-semibold text-amber-400" style={{ background: 'rgb(245 158 11 / 0.12)', border: '1px solid rgb(245 158 11 / 0.3)' }}>
+          <Crown size={14} aria-hidden="true" /> PRO
+        </span>
+      ) : undefined}
     >
-
-      {/* Scrollable content */}
-      <div className="relative z-10 flex-1 overflow-y-auto">
-        <div className="max-w-lg mx-auto px-4 py-6 pb-24">
-          {/* Header */}
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex items-center justify-between mb-8"
-          >
-            <motion.button
-              whileHover={{ scale: 1.05, x: -2 }}
-              whileTap={{ scale: 0.95 }}
-              onClick={onBack}
-              className="flex items-center gap-2 text-white/60 hover:text-white transition-colors"
-            >
-              <ArrowLeft size={20} />
-              <span className="text-sm font-medium">Back</span>
-            </motion.button>
-
-            {profile?.is_pro && (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-linear-to-r/srgb from-amber-500/20 to-orange-500/20 border border-amber-500/30">
-                <Crown size={14} className="text-amber-400" />
-                <span className="text-amber-400 text-xs font-semibold">PRO</span>
-              </div>
-            )}
-          </motion.div>
+      <div>
+        <div>
 
           {/* Profile Card */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="relative overflow-hidden mb-6 rounded-3xl"
-            style={{
-              background: 'var(--tm-pane-bg)',
-              backdropFilter: 'blur(20px)',
-              WebkitBackdropFilter: 'blur(20px)',
-              border: '1px solid var(--tm-pane-border)',
-              boxShadow: 'inset 0 1px 0 rgb(var(--tm-edge-rgb) / 0.1)'
-            }}
+            className="tm-glass relative overflow-hidden mb-6 rounded-3xl"
           >
 
             <div className="relative p-6">
@@ -623,14 +591,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.99 }}
             onClick={() => setShowChangePassword(true)}
-            className="w-full py-4 rounded-2xl text-white/80 font-medium flex items-center justify-center gap-2 mb-3"
-            style={{
-              background: 'rgb(var(--tm-ink-rgb) / 0.05)',
-              backdropFilter: 'blur(20px)',
-              WebkitBackdropFilter: 'blur(20px)',
-              border: '1px solid rgb(var(--tm-ink-rgb) / 0.1)',
-              boxShadow: 'inset 0 1px 0 rgb(var(--tm-edge-rgb) / 0.1)'
-            }}
+            className="tm-glass tm-glass-pill w-full py-4 rounded-2xl text-white/80 font-medium flex items-center justify-center gap-2 mb-3"
           >
             <Key size={18} />
             Change Password
@@ -644,14 +605,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.99 }}
             onClick={handleSignOut}
-            className="w-full py-4 rounded-2xl text-red-400 font-medium flex items-center justify-center gap-2"
-            style={{
-              background: 'rgb(var(--tm-ink-rgb) / 0.05)',
-              backdropFilter: 'blur(20px)',
-              WebkitBackdropFilter: 'blur(20px)',
-              border: '1px solid rgb(var(--tm-ink-rgb) / 0.1)',
-              boxShadow: 'inset 0 1px 0 rgb(var(--tm-edge-rgb) / 0.1)'
-            }}
+            className="tm-glass tm-glass-pill w-full py-4 rounded-2xl text-red-400 font-medium flex items-center justify-center gap-2"
           >
             <LogOut size={18} />
             Sign Out
@@ -782,7 +736,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              exit={scrimExit}
               className="fixed inset-0 bg-black/80 backdrop-blur-md z-50"
               onClick={() => {
                 setShowChangePassword(false);
@@ -796,7 +750,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
+              exit={popupExit}
               className="fixed inset-0 z-50 flex items-center justify-center p-4"
             >
               <div
@@ -941,7 +895,7 @@ export const AccountPage: React.FC<AccountPageProps> = ({ onBack }) => {
           </>
         )}
       </AnimatePresence>
-    </div>
+    </AppShell>
   );
 };
 

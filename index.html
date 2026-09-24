@@ -2,7 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <!-- interactive-widget=resizes-content: Chrome on Android (108+) and the
+         in-app WebViews stopped shrinking the layout viewport for the soft
+         keyboard, so a fixed bottom:0 composer sat under the keys while the
+         user typed. This restores the resize where it is honoured; App.tsx
+         measures the visual viewport for the browsers that ignore it. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
 
     <!-- Primary SEO Meta Tags -->
     <title>TimeMachine</title>
@@ -44,7 +49,13 @@
       } catch (e) {}
     </script>
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- Keep the installed iOS app below the status bar. With
+         black-translucent, WebKit anchors its shortened layout viewport at
+         the physical top of the screen: the Legacy header lands beneath the
+         clock and the missing status-bar height reappears as a black strip
+         below the fixed composer. The opaque black bar matches the dark
+         canvas and restores the viewport geometry used by the Legacy app. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="TimeMachine" />
     <meta name="application-name" content="TimeMachine Chat" />
 
@@ -107,7 +118,7 @@
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700&family=Newsreader:ital,opsz,wght@0,6..72,300..500;1,6..72,300..500&display=swap" rel="stylesheet">
   </head>
   <body>
     <noscript>

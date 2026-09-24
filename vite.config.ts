@@ -38,6 +38,14 @@ export default defineConfig(({ mode }) => {
         configureServer(server) {
           server.middlewares.use(async (req, res, next) => {
             const urlObj = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+            // Max Mode's document is cross-origin isolated so the in-browser
+            // Node runtime can boot — the same headers vercel.json sets for
+            // /max in production, and only there, because they would break
+            // the YouTube embeds and third-party frames on every other page.
+            if (/^\/max(\/|$)/.test(urlObj.pathname)) {
+              res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+              res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless');
+            }
             if (urlObj.pathname.startsWith('/api/')) {
               // Extract API endpoint name (strip leading /api/ and potential query parameters)
               const apiName = urlObj.pathname.slice(5);
@@ -80,13 +88,24 @@ export default defineConfig(({ mode }) => {
       // .vercel/output/functions, and Vitest's default excludes do not cover
       // that directory — so a local Vercel build would otherwise make the same
       // tests run twice, once from source and once from a stale bundle.
-      exclude: ['**/node_modules/**', '**/dist/**', '**/.vercel/**'],
+      exclude: ['**/node_modules/**', '**/dist/**', '**/.vercel/**', '**/legacy-tm/**'],
+    },
+    server: {
+      // 5173 unless a launcher hands us a port (the desktop preview does when
+      // another dev server already holds 5173). Only the GitHub OAuth callback
+      // for Max Mode is registered against 5173, and that flow is not part of
+      // an ordinary preview.
+      port: Number(process.env.PORT) || 5173,
     },
     resolve: {
       dedupe: ['react', 'react-dom'],
     },
     optimizeDeps: {
-      include: ['lucide-react']
+      include: ['lucide-react'],
+      // ffmpeg.wasm spawns its worker with new URL('./worker.js',
+      // import.meta.url); pre-bundling rewrites that path and the worker
+      // 404s in dev. The production build handles it as-is.
+      exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
     }
   };
 });

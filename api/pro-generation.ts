@@ -11,9 +11,11 @@ import {
   fetchUserMemories,
   formatMemoriesForContext,
   personaFallbacks,
+  resolveRunProvider,
   runProviderNames,
 } from './ai-proxy.js';
-import { loadPublishedToolsCached, resolveRequestTools } from './_lib/toolRegistry.js';
+import { API_SOLUTION, activeProviderChain, nuclearProviderChain } from './_lib/apiSolution.js';
+import { loadInstalledToolPins, loadPinnedPublishedTools, resolveRequestTools, searchPublishedTools } from './_lib/toolRegistry.js';
 import { registryToolPayload } from '../shared/toolRegistry.js';
 import { buildToolGuardrail, THINKING_DIRECTIVE, buildAppToolDirective, buildAttachedFilesDirective, resolveDeviceRoundBudget, selectToolSet, toApiMessages, type UserSkill } from './_lib/tools.js';
 import { enabledSkills, resolveFlightControlsCached } from './_lib/flightControls.js';
@@ -31,8 +33,9 @@ import {
   failProJob,
   getActiveProJob,
   getProJobByRunId,
+  storeProJobPayload,
 } from './_lib/proJobs.js';
-import type { ProGenerationPayload } from '../trigger/proGeneration.js';
+import type { ProGenerationPayload, ProGenerationReference } from '../trigger/proGeneration.js';
 import { proGenerationBodySchema, parseOrReject, rejectIfTooLarge } from './_lib/validation.js';
 import {
   applyOcrVision,
@@ -72,7 +75,6 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
 
   const {
     messages,
-    heatLevel,
     imageData,
     inputImageUrls,
     imageDimensions,
@@ -103,9 +105,9 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Sign in to use TimeMachine PRO', type: 'authRequired' });
   }
 
-  const proProvider = (personaConfig as { provider?: string }).provider || 'pollinations';
+  const proProvider = resolveRunProvider('pro', personaConfig, false);
   const limitOutcome = await checkRateLimit(userId, ip, 'pro', {
-    providers: runProviderNames(proProvider, personaConfig),
+    providers: API_SOLUTION === 'nuclear' ? ['osaii'] : runProviderNames(proProvider, personaConfig),
   });
   if (!limitOutcome.allowed) {
     if (limitOutcome.reason === 'backend_error' || limitOutcome.reason === 'spend_ceiling') {
@@ -125,13 +127,11 @@ async function handlePost(req: VercelRequest, res: VercelResponse) {
     ? (SPECIAL_MODE_CONFIGS as Record<string, Record<'default' | 'girlie' | 'pro', SpecialModeConfig>>)[specialMode]['pro']
     : null;
 
-  let systemPrompt: string;
-  if (specialModeConfig) {
-    systemPrompt = specialModeConfig.systemPrompt;
-  } else {
-    const validHeatLevel = heatLevel >= 1 && heatLevel <= 5 ? heatLevel : 2;
-    systemPrompt = personaConfig.systemPromptsByHeatLevel[validHeatLevel as keyof typeof personaConfig.systemPromptsByHeatLevel];
-  }
+  // Max Mode never reaches here: the client serves it through /api/ai-proxy,
+  // where a device round is a re-POST rather than a whole new Trigger job.
+  const systemPrompt: string = specialModeConfig
+    ? specialModeConfig.systemPrompt
+    : personaConfig.systemPrompt;
 
   let memoryContext = '';
   if (userId) {
@@ -155,7 +155,9 @@ The memory tags will be processed and removed from the visible response, so writ
 
   const thinkingDirective = specialMode === 'music-compose' ? '' : THINKING_DIRECTIVE;
 
-  const modelToUse = specialModeConfig?.model || personaConfig.model;
+  const modelToUse = API_SOLUTION === 'nuclear'
+    ? nuclearProviderChain('pro')[0].model
+    : specialModeConfig?.model || personaConfig.model;
   const deviceAppsEnabled = deviceApps ?? [];
   // PRO always gets the skills library, and twice Air's token budget for tools.
   // Flight Controls, same as /api/ai-proxy. PRO always has the built-in
@@ -174,9 +176,16 @@ The memory tags will be processed and removed from the visible response, so writ
   // Generated tools, exactly as /api/ai-proxy resolves them. The task cannot
   // read the registry for itself, so the code of any registry tool the model
   // might call travels with the job.
+  const canUseRegistry = (deviceAppsEnabled.includes('python') || deviceAppsEnabled.includes('composed-tools')) && deviceRounds < resolveDeviceRoundBudget();
+  const installedToolPins = canUseRegistry ? await loadInstalledToolPins(userId) : new Map();
+  const registryQuery = [...messages].reverse().find(message => !message.isAI)?.content ?? '';
+  const publishedTools = canUseRegistry
+    ? [...await searchPublishedTools(registryQuery, 12), ...await loadPinnedPublishedTools(installedToolPins)]
+    : [];
   const generatedTools = resolveRequestTools(
     sessionTools,
-    deviceAppsEnabled.includes('python') ? await loadPublishedToolsCached() : [],
+    publishedTools,
+    installedToolPins,
   );
 
   const toolSet = selectToolSet({
@@ -188,6 +197,8 @@ The memory tags will be processed and removed from the visible response, so writ
     deviceApps: deviceAppsEnabled,
     deviceDataPresent,
     deviceRoundsUsed: deviceRounds,
+    userIsAuthenticated: !!userId,
+    hasSearchableRegistry: canUseRegistry,
     surface: 'pro',
     extraDescriptors: generatedTools.descriptors,
   });
@@ -275,19 +286,21 @@ ${thinkingDirective}`;
   // K3 takes image parts, so PRO normally sends the image itself and never
   // transcribes. The chain is built here rather than at payload-assembly time
   // because the decision below depends on what is in it.
-  const primaryCapability: VisionCapability = specialModeConfig
+  const primaryCapability: VisionCapability = API_SOLUTION === 'nuclear'
+    ? { vision: 'ocr' }
+    : specialModeConfig
     ? { vision: specialModeConfig.vision, imageTransport: specialModeConfig.imageTransport }
     : {
         vision: personaConfig.vision,
         imageTransport: (personaConfig as ModelConfig).imageTransport,
       };
 
-  const providerChain = buildProviderChain(
+  const providerChain = activeProviderChain('pro', buildProviderChain(
     providerToUse,
     modelToUse,
     personaFallbacks(personaConfig),
     primaryCapability,
-  ).filter(hop => limitOutcome.providers.includes(hop.provider));
+  )).filter(hop => limitOutcome.providers.includes(hop.provider));
 
   const attachments = collectAttachments(imageData, inputImageUrls);
   const hasImageInput = hasAttachments(attachments);
@@ -370,6 +383,8 @@ ${thinkingDirective}`;
     searchAllowed,
     offeredTools: offeredToolNames,
     findableTools: toolSet.findable,
+    registrySearchEnabled: canUseRegistry,
+    installedToolPins: Object.fromEntries(installedToolPins),
     // The task runs on Trigger's infrastructure and cannot read Supabase for
     // this user, so the resolved skills travel with the job.
     userSkills,
@@ -388,7 +403,9 @@ ${thinkingDirective}`;
   };
 
   try {
-    const handle = await tasks.trigger('pro-generation', payload, {
+    await storeProJobPayload(job.id, payload);
+    const reference: ProGenerationReference = { jobId: job.id };
+    const handle = await tasks.trigger('pro-generation', reference, {
       tags: [
         'persona:pro',
         userId ? `user:${userId}` : 'user:anonymous',

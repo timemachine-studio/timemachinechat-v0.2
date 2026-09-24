@@ -1,4 +1,4 @@
-import type { ChatErrorCode } from '../../types/chat';
+import type { ChatErrorCode, HarnessResume } from '../../types/chat';
 
 /**
  * A generation failure with a machine-readable cause.
@@ -11,12 +11,15 @@ export class ChatError extends Error {
   readonly code: ChatErrorCode;
   /** Whatever streamed before the failure, so the UI can keep showing it. */
   readonly partialContent?: string;
+  /** Max Mode: the completed legs, so Retry continues rather than restarts. */
+  readonly resume?: HarnessResume;
 
-  constructor(code: ChatErrorCode, message: string, partialContent?: string) {
+  constructor(code: ChatErrorCode, message: string, partialContent?: string, resume?: HarnessResume) {
     super(message);
     this.name = 'ChatError';
     this.code = code;
     this.partialContent = partialContent;
+    this.resume = resume;
   }
 }
 
@@ -93,7 +96,7 @@ export const CHAT_ERROR_COPY: Record<ChatErrorCode, string> = {
   RETENTION_UNVERIFIED: 'That background PRO run could not be started. Try again, or use Air.',
   RATE_LIMITED: "You've used up your messages for now.",
   AUTH_EXPIRED: 'Your session expired. Sign in again to continue.',
-  PROVIDER_DOWN: 'The model is having a rough moment.',
+  PROVIDER_DOWN: "TimeMachine's servers are busy right now. Try again in a moment.",
   PAYLOAD_TOO_LARGE: 'That attachment is too large to send.',
   TIMEOUT: 'That took too long and timed out.',
   TRUNCATED: 'The response was cut off before it finished.',

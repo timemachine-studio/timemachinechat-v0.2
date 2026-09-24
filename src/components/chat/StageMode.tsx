@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChatMessage } from './ChatMessage';
-import { Message } from '../../types/chat';
+import { Message, LoadingPhase } from '../../types/chat';
 import { AI_PERSONAS } from '../../config/constants';
 import { useTheme } from '../../context/ThemeContext';
 
@@ -9,7 +9,7 @@ interface StageModeProps {
   currentPersona: keyof typeof AI_PERSONAS;
   onMessageAnimated: (messageId: string) => void;
   streamingMessageId?: string | null;
-  loadingPhase?: 'analyzing_photo' | 'thinking' | null;
+  loadingPhase?: LoadingPhase;
 }
 
 export function StageMode({
@@ -24,7 +24,7 @@ export function StageMode({
 
   return (
     <div className={`min-h-full pt-16 pb-48flush ${theme.text}`}>
-      <div className="h-[calc(100vh-16rem)] flex items-center justify-center">
+      <div className="h-[calc(var(--tm-100vh)-16rem)] flex items-center justify-center">
         <div className="transform translate-y-8">
           <ChatMessage
             {...lastMessage}

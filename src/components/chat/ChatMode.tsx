@@ -1,9 +1,9 @@
 import React, { useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen, HeartPulse } from 'lucide-react';
 import { ChatMessage } from './ChatMessage';
-import { Message } from '../../types/chat';
+import { Message, LoadingPhase } from '../../types/chat';
 import { AI_PERSONAS } from '../../config/constants';
 import { useTheme } from '../../context/ThemeContext';
 import { FlipWords } from '../ui/FlipWords';
@@ -25,7 +25,7 @@ interface ChatModeProps {
   onMessageAnimated: (messageId: string) => void;
   error?: string | null;
   streamingMessageId?: string | null;
-  loadingPhase?: 'analyzing_photo' | 'thinking' | null;
+  loadingPhase?: LoadingPhase;
   isGroupMode?: boolean;
   currentUserId?: string;
   onReply?: (message: ReplyTo) => void;
@@ -35,6 +35,8 @@ interface ChatModeProps {
   onOpenSesame?: () => void;
   onMcpApprovalDecision?: (messageId: string, decision: McpApprovalDecision) => void;
   onRetry?: (messageId: string) => void;
+  /** A mode that recolours the room (TM Healthcare) recolours the accent word too. */
+  accent?: 'healthcare';
   isRetrying?: boolean;
 }
 
@@ -55,8 +57,11 @@ export function ChatMode({
   onMcpApprovalDecision,
   onRetry,
   isRetrying,
+  accent,
 }: ChatModeProps) {
-  const { theme } = useTheme();
+  const { theme, uiStyle } = useTheme();
+  const legacyUi = uiStyle === 'legacy';
+  const reduced = useReducedMotion();
   const navigate = useNavigate();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Track the last user message ID we've scrolled to (prevents duplicate scrolls)
@@ -76,7 +81,10 @@ export function ChatMode({
 
         // Calculate scroll position to put the message at the top
         // Add a small offset (20px) for visual breathing room
-        const scrollOffset = messageRect.top - containerRect.top + container.scrollTop - 20;
+        // Keep the loaded message below the fixed header, including the notch.
+        const headerBottom = document.querySelector('.tm-chat-header')?.getBoundingClientRect().bottom ?? 0;
+        const clearance = Math.max(20, headerBottom - containerRect.top + 16);
+        const scrollOffset = messageRect.top - containerRect.top + container.scrollTop - clearance;
 
         container.scrollTo({
           top: Math.max(0, scrollOffset),
@@ -122,32 +130,39 @@ export function ChatMode({
   // When chat has started, show all messages except the initial AI greeting (first message)
   const displayMessages = showWelcomeText ? [] : messages.slice(1);
 
-  // Persona-based colors for the animated words
+  // The three minds' hues, as on the landing page.
   const personaColors: Record<string, string> = {
     default: 'text-purple-400',
     girlie: 'text-pink-400',
     pro: 'text-cyan-400'
   };
-  const flipWordsColor = personaColors[currentPersona] || personaColors.default;
+  // TM Healthcare paints the room green; the accent word follows.
+  const flipWordsColor = accent === 'healthcare' ? 'text-emerald-400' : personaColors[currentPersona] || personaColors.default;
 
   return (
-    <div className={`min-h-full pt-20 pb-48 ${theme.text}`}>
+    <div className={`min-h-full ${legacyUi ? 'pt-20' : 'pt-24'} ${showWelcomeText ? 'pb-24' : 'pb-48'} ${theme.text}`}>
       <div className="w-full max-w-4xl mx-auto px-4">
         {error && (
-          <div className="bg-[rgba(239,68,68,0.15)] border border-[rgba(239,68,68,0.25)] rounded-lg p-4 mb-4 text-[rgb(252,165,165)]">
+          <div
+            className="mb-4 rounded-2xl px-4 py-3 text-[15px]"
+            style={{ background: 'rgb(239 68 68 / 0.12)', border: '1px solid rgb(239 68 68 / 0.25)', color: 'rgb(252 165 165)' }}
+            role="alert"
+          >
             {error}
           </div>
         )}
 
-        {/* Welcome Text - shown when no messages sent yet */}
+        {/* Welcome. The current shell speaks in the landing page's display
+            voice, centred; the legacy shell keeps its two quiet lines in the
+            UI face, set to the left of a centred block. */}
         <AnimatePresence>
-          {showWelcomeText && (
+          {showWelcomeText && legacyUi && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -20, scale: 0.95 }}
               transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
-              className="h-[calc(100vh-16rem)] flex items-center justify-center"
+              className="tm-chat-welcome tm-chat-welcome-legacy flex items-center justify-center"
             >
               <div className="flex w-full max-w-[23rem] flex-col items-start px-2 sm:w-auto sm:max-w-none sm:px-4">
                 <div className="tm-welcome-text text-lg sm:text-xl font-normal text-neutral-400 text-left">
@@ -156,7 +171,7 @@ export function ChatMode({
                     <FlipWords
                       words={["better", "brighter", "dream", '"my"']}
                       duration={2500}
-                      className={flipWordsColor}
+                      className={`px-2 ${flipWordsColor}`}
                     />
                   </div>
                   <div>future with TimeMachine.</div>
@@ -171,23 +186,77 @@ export function ChatMode({
                   ] as const).map((item, i) => (
                     <motion.button
                       key={item.label}
+                      type="button"
                       initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ duration: 0.4, delay: 0.3 + i * 0.08, ease: [0.22, 1, 0.36, 1] }}
                       whileHover={{ scale: 1.04, y: -1 }}
                       whileTap={{ scale: 0.97 }}
                       onClick={item.onClick}
-                      className="reveoule-action-pill flex shrink-0 items-center justify-center gap-1.5 rounded-full px-3.5 py-2.5 text-white/50 transition-colors duration-200 hover:text-white/80 sm:gap-2 sm:px-4"
+                      className="reveoule-action-pill flex shrink-0 items-center justify-center gap-1.5 rounded-full px-3.5 py-2.5 transition-colors duration-200 sm:gap-2 sm:px-4"
+                      // No backdrop-filter: under the block's opacity entrance a
+                      // blurred pill renders black on iOS for a frame or two.
                       style={{
-                        background: 'rgb(var(--tm-ink-rgb) / 0.04)',
-                        backdropFilter: 'blur(20px)',
-                        WebkitBackdropFilter: 'blur(20px)',
+                        background: 'rgb(var(--tm-ink-rgb) / 0.05)',
                         border: '1px solid rgb(var(--tm-ink-rgb) / 0.08)',
                         boxShadow: 'inset 0 1px 0 rgb(var(--tm-edge-rgb) / 0.06)',
+                        color: 'rgb(var(--tm-ink-rgb) / 0.55)',
                       }}
                     >
-                      <item.icon className="w-3.5 h-3.5" />
+                      <item.icon className="w-3.5 h-3.5" aria-hidden="true" />
                       <span className="text-xs font-medium tracking-wide">{item.label}</span>
+                    </motion.button>
+                  ))}
+                </div>
+              </div>
+            </motion.div>
+          )}
+          {/* No `filter: blur()` on this entrance: on iOS the whole block is
+              rasterised into the filtered layer and the pills, arriving on
+              their delays, flashed black while it resolved. */}
+          {showWelcomeText && !legacyUi && (
+            <motion.div
+              initial={reduced ? false : { opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reduced ? undefined : { opacity: 0, y: -16, scale: 0.98 }}
+              transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+              className="tm-chat-welcome flex items-center justify-center"
+            >
+              <div className="flex w-full flex-col items-center text-center">
+                <h1
+                  className="tm-display tm-welcome-text tm-welcome-heading"
+                  style={{ color: 'rgb(var(--tm-ink-rgb) / 0.95)' }}
+                >
+                  <span className="flex items-baseline justify-center gap-[0.22em]">
+                    <span>Start a</span>
+                    <FlipWords
+                      words={["better", "brighter", "dream", '"my"']}
+                      duration={2500}
+                      className={`italic font-light ${flipWordsColor}`}
+                    />
+                  </span>
+                  <span className="block" style={{ color: 'rgb(var(--tm-ink-rgb) / 0.7)' }}>future with TimeMachine.</span>
+                </h1>
+
+                {/* Where else to go: three glass pills, as under the landing composer. */}
+                <div className="mt-7 flex flex-wrap items-center justify-center gap-1.5 sm:mt-9">
+                  {([
+                    { label: 'Notes', icon: BookOpen, onClick: () => navigate('/notes') },
+                    { label: 'Healthcare', icon: HeartPulse, onClick: () => navigate('/healthcare') },
+                    { label: 'Sesame', icon: SesameMark, onClick: onOpenSesame },
+                  ] as const).map((item, i) => (
+                    <motion.button
+                      key={item.label}
+                      type="button"
+                      initial={reduced ? false : { opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.4, delay: 0.25 + i * 0.07, ease: [0.22, 1, 0.36, 1] }}
+                      onClick={item.onClick}
+                      className="reveoule-action-pill tm-press tm-glass-pill inline-flex min-h-10 items-center gap-1.5 rounded-full px-3.5 py-2 text-[13px] transition-colors sm:min-h-11 sm:gap-2 sm:px-4 sm:text-sm"
+                      style={{ border: '1px solid rgb(var(--tm-ink-rgb) / 0.12)', color: 'rgb(var(--tm-ink-rgb) / 0.7)' }}
+                    >
+                      <item.icon className="h-4 w-4" aria-hidden="true" />
+                      {item.label}
                     </motion.button>
                   ))}
                 </div>
@@ -231,7 +300,7 @@ export function ChatMode({
             })}
           </div>
         )}
-        <div ref={messagesEndRef} className="h-20" />
+        <div ref={messagesEndRef} className={showWelcomeText ? undefined : 'h-20'} />
       </div>
     </div>
   );
