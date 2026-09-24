@@ -14,7 +14,7 @@ const NUCLEAR_FALLBACKS: readonly ProviderHop[] = [
 ];
 
 export function nuclearProviderChain(persona: string): ProviderHop[] {
-  const primary = persona === 'pro' ? 'mimo-z/mimo-v2.6-pro' : 'poolside/laguna-xs-2.1';
+  const primary = persona === 'pro' ? 'mimo-z/mimo-v2.6-pro' : 'venice-z/gemma-4-uncensored';
   return [{ provider: 'osaii', model: primary, vision: 'ocr' }, ...NUCLEAR_FALLBACKS];
 }
 
