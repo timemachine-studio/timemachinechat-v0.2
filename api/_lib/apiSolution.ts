@@ -19,5 +19,5 @@ export function nuclearProviderChain(persona: string): ProviderHop[] {
 }
 
 export function activeProviderChain(persona: string, productionChain: ProviderHop[]): ProviderHop[] {
-  return API_SOLUTION === 'nuclear' ? nuclearProviderChain(persona) : productionChain;
+  return API_SOLUTION === 'production' ? nuclearProviderChain(persona) : productionChain;
 }

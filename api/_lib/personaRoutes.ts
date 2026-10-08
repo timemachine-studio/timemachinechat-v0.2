@@ -19,12 +19,12 @@ export interface PersonaRoute extends VisionCapability {
 /* Air's route: the primary and the fallback chain behind it. Spread into
    both Air and Girlie in ai-proxy's AI_PERSONAS. */
 export const AIR_ROUTE = {
-  provider: 'eaon', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
-  model: 'eaon/minimax-m3',
+  provider: 'pollinations', // allowed change to 'groq' or 'cerebras' or 'pollinations' or 'eaon' or 'nvidia'
+  model: 'openai/gpt-6-luna',
   // MiniMax M3 is text-only on this route. Transcribe image turns instead of
   // handing it an image_url part and turning an otherwise valid chat into a
   // provider error.
-  vision: 'ocr' as const,
+  vision: 'native' as const,
   // Air's fallback chain, in order. If the primary above fails for any
   // reason — 429, 5xx, timeout, missing key, unknown model — the run moves
   // to the next entry without the user seeing anything. Only when every
@@ -44,10 +44,10 @@ export const AIR_ROUTE = {
     // provider, so once eaon itself is down for three turns both hops are
     // skipped together and the chain continues below. Text-only per the
     // catalog (same line as llm7's minimax-m2.7 in vision.ts), so `ocr`.
-    { provider: 'eaon', model: 'eaon/gemini-3.7-flash', vision: 'ocr' as const },
+    { provider: 'pollinations', model: 'openai/gpt-5.6-luna', vision: 'native' as const },
     // Lightest Gemini on the same route: a third model-level cushion before
     // the chain leaves eaon. OCR until an image has been sent through it.
-    { provider: 'eaon', model: 'eaon/gemini-3.1-flash-lite', vision: 'ocr' as const },
+    { provider: 'nvidia', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', vision: 'ocr' as const },
     // The rest is ordered by how dependable each hop has actually been, not
     // by preference: the earlier a hop sits, the more often a stall on it
     // costs a user 45s before the chain moves on. nvidia is the one that
@@ -59,7 +59,7 @@ export const AIR_ROUTE = {
     // nvidia block forwards. Both verified against the live endpoint; what
     // was not fixable is its latency — nvidia's free endpoint queued even a
     // four-token answer for 19–30s in testing.
-    { provider: 'nvidia', model: 'nvidia/nemotron-3.5-lightning-30b-a3b', vision: 'ocr' as const },
+    { provider: 'pollinations', model: 'openai/gpt-oss-20b', vision: 'ocr' as const },
     // Last line, on purpose: Pollinations is paid and has been the most
     // dependable host in this file, so it is reached only once the free
     // providers are down. Text-only per its own model metadata
@@ -80,11 +80,11 @@ export const AIR_ROUTE = {
 
 /* PRO's route. */
 export const PRO_ROUTE = {
-  provider: 'eaon',
-  model: 'eaon/minimax-m3',
+  provider: 'pollinations',
+  model: 'openai/gpt-6.1-sol',
   // MiniMax's catalog lists the M line as text-only (see minimax-m2.7 in
   // api/_lib/vision.ts), so PRO transcribes images before this hop.
-  vision: 'ocr' as const,
+  vision: 'native' as const,
   // Same contract as Air's chain above: tried in order, silently, and only
   // an exhausted chain reaches the user. PRO runs as a Trigger.dev job, so
   // the chain travels in the job payload (see api/pro-generation.ts).
@@ -94,8 +94,8 @@ export const PRO_ROUTE = {
   // ai.eaon.dev catalog prefixes everything with `eaon/` — an id that route
   // does not serve fails worse than no hop at all.
   fallbacks: [
-      { provider: 'eaon', model: 'eaon/gemini-3.8-flash', vision: 'ocr' as const },
-      { provider: 'eaon', model: 'eaon/deepseek-v4-flash', vision: 'ocr' as const },
-      { provider: 'pollinations', model: 'nvidia/nemotron-3.5-lightning', vision: 'ocr' as const },
+      { provider: 'pollinations', model: 'openai/gpt-6-sol', vision: 'native' as const },
+      { provider: 'pollinations', model: 'z-ai/glm-5.3', vision: 'ocr' as const },
+      { provider: 'pollinations', model: 'x-ai/grok-4.6', vision: 'native' as const },
     ],
 } as const;
