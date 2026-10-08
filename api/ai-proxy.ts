@@ -54,6 +54,7 @@ import {
 import { aiProxyBodySchema, parseOrReject, rejectIfTooLarge } from './_lib/validation.js';
 import { handleChatTitleRequest } from './_lib/chatTitle.js';
 import { AIR_ROUTE, PRO_ROUTE } from './_lib/personaRoutes.js';
+import { pollinationsReasoning } from './_lib/modelReasoning.js';
 import { API_SOLUTION, OSAII_CHAT_URL, activeProviderChain, nuclearProviderChain } from './_lib/apiSolution.js';
 
 // Configure API_SOLUTION=production | nuclear on the server (default: nuclear).
@@ -1753,7 +1754,8 @@ export async function callPollinationsAPIStreaming(
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
+  tools?: ProviderTool[],
+  reasoningEffort?: string | null
 ): Promise<ReadableStream> {
   if (!POLLINATIONS_API_KEY) {
     throw new Error('POLLINATIONS_API_KEY is not configured for Pollinations requests');
@@ -1773,10 +1775,7 @@ export async function callPollinationsAPIStreaming(
     temperature,
     stream: true,
 
-    // --- Bulletproof Thinking/Reasoning Deactivation ---
-    thinking_budget: 0,          // Maps to Gemini / Open-source routers
-    reasoning_effort: "none",    // Maps to OpenAI-style routers
-    thinking: null               // Maps to Anthropic-style routers
+    ...pollinationsReasoning(model, reasoningEffort)
   };
 
   if (maxTokens) {
@@ -1810,16 +1809,9 @@ export async function callPollinationsAPIStreaming(
   try {
     response = await post(requestBody);
   } catch (error) {
-    // Pollinations is a gateway in front of many upstreams, and the three
-    // reasoning switches above are three different vendors' spellings — any
-    // upstream that validates its body strictly can answer one of them with
-    // a 400 (LLM7 did exactly that with `thinking_budget`). This is the last
-    // hop in Air's and Girlie's chains, so a refused switch must not be the
-    // reason a turn fails: send the request once more with none of them.
-    // The stream below never forwards a reasoning delta, and the client
-    // strips <think> from text, so a model that thinks anyway is verbose,
-    // not broken.
-    if (!(error instanceof ProviderHttpError) || error.status !== 400) throw error;
+    // Gateway capabilities can change. If the configured effort is refused,
+    // retry once with the model default before handing off to another hop.
+    if (!(error instanceof ProviderHttpError) || error.status !== 400 || !requestBody.reasoning_effort) throw error;
     console.warn('[pollinations] 400 with reasoning switches; retrying without them');
     const { thinking_budget: _tb, reasoning_effort: _re, thinking: _th, ...plain } = requestBody;
     void _tb; void _re; void _th;
@@ -2079,7 +2071,8 @@ async function callPollinationsAPI(
   model: string,
   temperature: number = 1,
   maxTokens?: number,
-  tools?: ProviderTool[]
+  tools?: ProviderTool[],
+  reasoningEffort?: string | null
 ): Promise<ProviderResponse> {
   if (!POLLINATIONS_API_KEY) {
     throw new Error('POLLINATIONS_API_KEY is not configured for Pollinations requests');
@@ -2097,7 +2090,8 @@ async function callPollinationsAPI(
     model: model,
     messages: cleanedMessages,
     temperature,
-    stream: false
+    stream: false,
+    ...pollinationsReasoning(model, reasoningEffort)
   };
 
   if (maxTokens) {
@@ -2207,7 +2201,7 @@ export function buildProviderChain(
   provider: string,
   model: string,
   fallbacks: ProviderHop[] = [],
-  primaryCapability: VisionCapability = {},
+  primaryCapability: VisionCapability & { reasoningEffort?: string | null } = {},
 ): ProviderHop[] {
   const chain: ProviderHop[] = [];
   const seen = new Set<string>();
@@ -2232,6 +2226,7 @@ export function buildProviderChain(
       model: hop.model,
       ...(hop.vision ? { vision: hop.vision } : {}),
       ...(hop.imageTransport ? { imageTransport: hop.imageTransport } : {}),
+      ...(hop.reasoningEffort !== undefined ? { reasoningEffort: hop.reasoningEffort } : {}),
     });
   }
 
@@ -2264,7 +2259,7 @@ interface StreamingModelConfig {
   model: string;
   temperature?: number;
   maxTokens?: number;
-  reasoningEffort?: string;
+  reasoningEffort?: string | null;
 }
 
 export async function dispatchStreamingProvider(
@@ -2283,9 +2278,9 @@ export async function dispatchStreamingProvider(
   const open = async (): Promise<ReadableStream> => {
     switch (provider) {
       case 'groq':
-        return callGroqStandardAPIStreaming(messages, model, temperature as number, maxTokens as number, tools, reasoningEffort);
+        return callGroqStandardAPIStreaming(messages, model, temperature as number, maxTokens as number, tools, reasoningEffort ?? undefined);
       case 'pollinations':
-        return callPollinationsAPIStreaming(messages, model, temperature, maxTokens, tools);
+        return callPollinationsAPIStreaming(messages, model, temperature, maxTokens, tools, reasoningEffort);
       case 'secretstoai':
       case 'secrectstoai':
         return callSecretsToAIAPIStreaming(messages, model, temperature, maxTokens, tools);
@@ -2293,7 +2288,7 @@ export async function dispatchStreamingProvider(
         return callEaonAPIStreaming(messages, model, temperature, maxTokens, tools);
       case 'nvidia':
       case 'nim':
-        return callNvidiaAPIStreaming(messages, model, temperature, maxTokens, tools, reasoningEffort);
+        return callNvidiaAPIStreaming(messages, model, temperature, maxTokens, tools, reasoningEffort ?? undefined);
       case 'amd':
         return callAmdAPIStreaming(messages, model, temperature, maxTokens, tools);
       case 'llm7':
@@ -2743,7 +2738,7 @@ ${thinkingDirective}`;
         // a single byte reaches the client. Once tokens are flowing there is
         // no resume, so a mid-stream death surfaces as truncated instead
         // (1.9/1.11).
-        const fullChain = activeProviderChain(persona, buildProviderChain(runProvider, runModel, personaFallbacks(personaConfig), primaryCapability));
+        const fullChain = activeProviderChain(persona, buildProviderChain(runProvider, runModel, personaFallbacks(personaConfig), { ...primaryCapability, reasoningEffort: runReasoningEffort }));
         // Drop hops whose provider is out of budget for the day. With no ceiling
         // configured openProviders holds the whole chain, so nothing is lost.
         const providerChain = openProviders.length > 0
@@ -2849,7 +2844,7 @@ ${thinkingDirective}`;
                   model: hop.model,
                   temperature: runTemperature,
                   maxTokens: runMaxTokens,
-                  reasoningEffort: runReasoningEffort,
+                  reasoningEffort: hop.reasoningEffort,
                 }
               ),
               (message) => console.log(`[${persona}] ${message}`),
@@ -2874,6 +2869,7 @@ ${thinkingDirective}`;
             if (approvalContext) {
               approvalContext.provider = run.provider;
               approvalContext.model = run.model;
+              approvalContext.reasoningEffort = chain.find(hop => hop.provider === run.provider && hop.model === run.model)?.reasoningEffort ?? undefined;
             }
             if (run.provider !== runProvider) {
               console.warn(`[${persona}] fell back from ${runProvider} to ${run.provider}`);
@@ -3046,7 +3042,8 @@ ${thinkingDirective}`;
               flowConfig.model,
               flowConfig.temperature,
               flowConfig.maxTokens,
-              toolsToUse
+              toolsToUse,
+              flowConfig.reasoningEffort
             );
           } else if (fsProvider === 'secretstoai' || fsProvider === 'secrectstoai') {
             apiResponse = await callSecretsToAIAPI(
@@ -3150,7 +3147,8 @@ ${thinkingDirective}`;
               modelToUse,
               temperatureToUse,
               maxTokensToUse,
-              toolsToUse
+              toolsToUse,
+              reasoningEffortToUse
             );
           } else if (airProvider === 'secretstoai' || airProvider === 'secrectstoai') {
             apiResponse = await callSecretsToAIAPI(
@@ -3346,7 +3344,8 @@ ${thinkingDirective}`;
               modelToUse,
               temperatureToUse,
               maxTokensToUse,
-              activeTools
+              activeTools,
+              reasoningEffortToUse
             );
           }
 
@@ -3469,7 +3468,8 @@ ${thinkingDirective}`;
             modelToUse,
             temperatureToUse,
             maxTokensToUse,
-            toolsToUse
+            toolsToUse,
+            reasoningEffortToUse
           );
         } else if (provider === 'cerebras') {
           const requestBody: ProviderRequest = {

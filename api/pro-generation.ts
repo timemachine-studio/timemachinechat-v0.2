@@ -299,7 +299,7 @@ ${thinkingDirective}`;
     providerToUse,
     modelToUse,
     personaFallbacks(personaConfig),
-    primaryCapability,
+    { ...primaryCapability, reasoningEffort: reasoningEffortToUse },
   )).filter(hop => limitOutcome.providers.includes(hop.provider));
 
   const attachments = collectAttachments(imageData, inputImageUrls);
