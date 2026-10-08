@@ -176,6 +176,7 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export interface ProviderHop extends VisionCapability {
   provider: string;
   model: string;
+  reasoningEffort?: string | null;
 }
 
 export interface ProviderRunResult<T> {

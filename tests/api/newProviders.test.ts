@@ -346,18 +346,9 @@ describe('reasoning on groq', () => {
     return JSON.parse(fetchMock.mock.calls[0][1].body as string) as Record<string, unknown>;
   }
 
-  it('is switched off for Air, and set low rather than off for Flow State', async () => {
-    // Measured live: without this, "what is 17*23" cost 255 completion tokens
-    // and opened with "<think>Here's a thinking process"; with it, 4 tokens
-    // and "391". gpt-oss answers 'none' with a 400, so Flow State carries its
-    // own value and must never inherit Air's.
-    const air = AI_PERSONAS.default;
-    expect(air.reasoningEffort).toBe('none');
-    expect(air.flowState.reasoningEffort).toBe('low');
-    expect(air.flowState.reasoningEffort).not.toBe(air.reasoningEffort);
-
-    expect((await groqBody(air.reasoningEffort)).reasoning_effort).toBe('none');
-    expect((await groqBody(air.flowState.reasoningEffort)).reasoning_effort).toBe('low');
+  it('forwards an explicit effort and leaves an unspecified effort unset', async () => {
+    expect((await groqBody('none')).reasoning_effort).toBe('none');
+    expect((await groqBody('low')).reasoning_effort).toBe('low');
     expect((await groqBody(undefined)).reasoning_effort).toBeUndefined();
   });
 });
@@ -417,14 +408,41 @@ describe('the pollinations hop', () => {
     'data: [DONE]\n\n',
   ]);
 
-  it('switches reasoning off three ways, and drops a reasoning delta that arrives anyway', async () => {
+  it('forwards PRO reasoning effort without contradictory deactivation switches', async () => {
+    const fetchMock = vi.fn(async () => answer());
+    vi.stubGlobal('fetch', fetchMock);
+    await drain(await dispatchStreamingProvider('pollinations', messages, undefined, {
+      model: AI_PERSONAS.pro.model, temperature: 0.8, maxTokens: 34200,
+      reasoningEffort: AI_PERSONAS.pro.reasoningEffort,
+    }));
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.reasoning_effort).toBe('low');
+    expect(body).not.toHaveProperty('thinking_budget');
+    expect(body).not.toHaveProperty('thinking');
+  });
+
+  it('omits unsupported reasoning controls on the Grok fallback', async () => {
+    const fetchMock = vi.fn(async () => answer());
+    vi.stubGlobal('fetch', fetchMock);
+    await drain(await dispatchStreamingProvider('pollinations', messages, undefined, {
+      model: 'x-ai/grok-4.6', reasoningEffort: null,
+    }));
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body).not.toHaveProperty('reasoning_effort');
+    expect(body).not.toHaveProperty('thinking_budget');
+    expect(body).not.toHaveProperty('thinking');
+  });
+
+  it('uses the model reasoning setting and drops a reasoning delta that arrives anyway', async () => {
     const fetchMock = vi.fn(async () => answer());
     vi.stubGlobal('fetch', fetchMock);
     const frames = await drain(await dispatchStreamingProvider('pollinations', messages, undefined, {
       model: 'nvidia/nemotron-3.5-lightning', temperature: 0.8, maxTokens: 100,
     }));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body).toMatchObject({ thinking_budget: 0, reasoning_effort: 'none', thinking: null });
+    expect(body).toMatchObject({ reasoning_effort: 'none' });
+    expect(body).not.toHaveProperty('thinking_budget');
+    expect(body).not.toHaveProperty('thinking');
     expect(frames.filter(f => f.type === 'content').map(f => f.content)).toEqual(['391']);
   });
 

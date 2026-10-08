@@ -231,7 +231,11 @@ export const proGeneration = task({
                 model: hop.model,
                 temperature: payload.temperature,
                 maxTokens: payload.maxTokens,
-                reasoningEffort: payload.reasoningEffort,
+                reasoningEffort: hop.reasoningEffort !== undefined
+                  ? hop.reasoningEffort
+                  : hop.provider === payload.provider && hop.model === payload.model
+                    ? payload.reasoningEffort
+                    : undefined,
               }
             ),
             (message) => logger.log(`[pro] ${message}`),
