@@ -72,13 +72,13 @@ export const AI_PERSONAS = {
     temperature: 0.8,
     maxTokens: 9304,
     flowState: {
-      provider: 'cerebras',
-      model: 'gpt-oss-120b',
+      provider: 'pollinations',
+      model: 'community/tomdacatto/llama-3.1-8B',
       // Flow State swaps the model, so it carries its own capability. Air's
       // `vision: 'native'` above describes Gemini, not this.
       vision: 'ocr' as const,
       temperature: 0.8,
-      maxTokens: 5304,
+      maxTokens: 9304,
       // Its own setting, not Air's: gpt-oss rejects 'none' outright ("must be
       // one of low, medium, or high" — a 400, verified), so inheriting the
       // persona's value would fail every Flow State turn.
